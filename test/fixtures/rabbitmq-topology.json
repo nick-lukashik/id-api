@@ -1,0 +1,272 @@
+{
+    "vhosts": [
+        {
+            "name": "/"
+        }
+    ],
+    "exchanges": [
+        {
+            "name": "id.events",
+            "vhost": "/",
+            "type": "topic",
+            "durable": true,
+            "auto_delete": false,
+            "internal": false,
+            "arguments": {}
+        },
+        {
+            "name": "pay.events",
+            "vhost": "/",
+            "type": "topic",
+            "durable": true,
+            "auto_delete": false,
+            "internal": false,
+            "arguments": {}
+        },
+        {
+            "name": "wallet.events",
+            "vhost": "/",
+            "type": "topic",
+            "durable": true,
+            "auto_delete": false,
+            "internal": false,
+            "arguments": {}
+        }
+    ],
+    "queues": [
+        {
+            "name": "id-api.subscriptions.dlq",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "id-api.subscriptions",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "id-api.subscriptions.dlq",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "id-api.subscriptions.retry.0",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "id-api.subscriptions",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 5000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "id-api.subscriptions.retry.1",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "id-api.subscriptions",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 30000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "id-api.subscriptions.retry.2",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "id-api.subscriptions",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 120000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "notifications-api.events.dlq",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "notifications-api.events",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "notifications-api.events.dlq",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "notifications-api.events.retry.0",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "notifications-api.events",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 5000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "notifications-api.events.retry.1",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "notifications-api.events",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 30000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "notifications-api.events.retry.2",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "notifications-api.events",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 120000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "wallet-api.payments.dlq",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "wallet-api.payments",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "wallet-api.payments.dlq",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "wallet-api.payments.retry.0",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "wallet-api.payments",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 5000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "wallet-api.payments.retry.1",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "wallet-api.payments",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 30000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        },
+        {
+            "name": "wallet-api.payments.retry.2",
+            "vhost": "/",
+            "durable": true,
+            "auto_delete": false,
+            "arguments": {
+                "x-dead-letter-exchange": "",
+                "x-dead-letter-routing-key": "wallet-api.payments",
+                "x-dead-letter-strategy": "at-least-once",
+                "x-message-ttl": 120000,
+                "x-overflow": "reject-publish",
+                "x-queue-type": "quorum"
+            }
+        }
+    ],
+    "bindings": [
+        {
+            "source": "pay.events",
+            "vhost": "/",
+            "destination": "id-api.subscriptions",
+            "destination_type": "queue",
+            "routing_key": "pay.subscription.changed.v1",
+            "arguments": {}
+        },
+        {
+            "source": "id.events",
+            "vhost": "/",
+            "destination": "notifications-api.events",
+            "destination_type": "queue",
+            "routing_key": "id.user.registered.v1",
+            "arguments": {}
+        },
+        {
+            "source": "pay.events",
+            "vhost": "/",
+            "destination": "notifications-api.events",
+            "destination_type": "queue",
+            "routing_key": "pay.payment.succeeded.v1",
+            "arguments": {}
+        },
+        {
+            "source": "wallet.events",
+            "vhost": "/",
+            "destination": "notifications-api.events",
+            "destination_type": "queue",
+            "routing_key": "wallet.credit.posted.v1",
+            "arguments": {}
+        },
+        {
+            "source": "pay.events",
+            "vhost": "/",
+            "destination": "wallet-api.payments",
+            "destination_type": "queue",
+            "routing_key": "pay.payment.succeeded.v1",
+            "arguments": {}
+        }
+    ]
+}
