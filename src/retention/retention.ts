@@ -34,6 +34,12 @@ export type Purged = {
     authorizationCodes: number
 }
 
+const nothingPurged = (): Purged => ({
+    loginChallenges: 0,
+    sessions: 0,
+    authorizationCodes: 0,
+})
+
 type DeleteBatch = (tx: Tx) => PromiseLike<{
     rowCount: number | null
 }>
@@ -71,8 +77,9 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
     /**
      * One pass as of `now`: null when another replica holds the lock at the start;
      * when it takes the lock later, the pass stops there and returns what it deleted.
+     * `purged` counts as it goes, so a caller still knows it when a batch fails.
      */
-    async purge(now: Date): Promise<Purged | null> {
+    async purge(now: Date, purged: Purged = nothingPurged()): Promise<Purged | null> {
         const before = (ms: number) => new Date(now.getTime() - ms)
         const challengeCutoff = before(LOGIN_CHALLENGE_RETENTION_MS)
         const revokedCutoff = before(REVOKED_SESSION_RETENTION_MS)
@@ -136,11 +143,6 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
                     ),
             ],
         ]
-        const purged: Purged = {
-            loginChallenges: 0,
-            sessions: 0,
-            authorizationCodes: 0,
-        }
         let started = false
         for (const [table, deleteBatch] of batches) {
             // Until a batch comes back short; a shutdown stops between batches.
@@ -178,13 +180,15 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
     }
 
     private async pass() {
+        const purged = nothingPurged()
         try {
-            const purged = await this.purge(new Date())
-            if (purged && purged.loginChallenges + purged.sessions + purged.authorizationCodes > 0)
+            await this.purge(new Date(), purged)
+            if (purged.loginChallenges + purged.sessions + purged.authorizationCodes > 0)
                 this.logger.log(purged, 'Expired sign-in data deleted')
         } catch (error) {
             this.logger.error(
                 {
+                    ...purged,
                     err: (error as Error).message,
                 },
                 'Retention pass failed',

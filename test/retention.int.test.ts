@@ -274,10 +274,13 @@ describe('retention batches', () => {
 
     it('keeps the deletes of one table when a later table fails', async () => {
         const [user] = await t.db
-            .select({
+            .insert(users)
+            .values({
+                email: `${randomUUID()}@example.com`,
+            })
+            .returning({
                 id: users.id,
             })
-            .from(users)
         if (!user) throw new Error('no user row')
         const old = await challenge(ago(25 * HOUR))
         const revoked = await session(user.id, {
@@ -286,10 +289,17 @@ describe('retention batches', () => {
         })
         allowDeletes = await refuseDeletes('sessions', 0)
 
-        await expect(retention.purge(now)).rejects.toThrow()
+        const purged = {
+            loginChallenges: 0,
+            sessions: 0,
+            authorizationCodes: 0,
+        }
+        await expect(retention.purge(now, purged)).rejects.toThrow()
         const left = await remaining()
         expect(left.challenges).not.toContain(old)
         expect(left.sessions).toContain(revoked)
+        // What the failed pass had deleted is still known: its log line says it.
+        expect(purged.loginChallenges).toBeGreaterThanOrEqual(1)
     })
 
     it('stops after the batch under way on a shutdown', async () => {
