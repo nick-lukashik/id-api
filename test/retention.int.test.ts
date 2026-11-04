@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
+import { sql } from 'drizzle-orm'
 import type pg from 'pg'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { PG_POOL } from '../src/common/database/database.js'
 import { authorizationCodes, loginChallenges, sessions, users } from '../src/db/schema.js'
 import { RETENTION_LOCK, Retention } from '../src/retention/retention.js'
@@ -201,5 +202,133 @@ describe('retention', () => {
             sessions: ids('revokedYesterday', 'child', 'live'),
             codes: [],
         })
+    })
+})
+
+describe('retention batches', () => {
+    /** More than one batch of them (BATCH_SIZE in retention.ts is 1000). */
+    const OLD_CHALLENGES = 1_500
+
+    async function oldChallenges(count: number) {
+        const createdAt = ago(25 * HOUR)
+        await t.db.insert(loginChallenges).values(
+            Array.from(
+                {
+                    length: count,
+                },
+                () => {
+                    const id = randomUUID()
+                    return {
+                        id,
+                        email: `${id}@example.com`,
+                        codeHash: 'h'.repeat(64),
+                        locale: 'en',
+                        createdAt,
+                        expiresAt: new Date(createdAt.getTime() + 600_000),
+                    } as const
+                },
+            ),
+        )
+    }
+
+    /** The database refuses to delete rows of `table` after the first `allowed`, across transactions. */
+    async function refuseDeletes(table: 'login_challenges' | 'sessions', allowed: number) {
+        await t.db.execute(sql.raw('create sequence retention_test_deleted'))
+        await t.db.execute(
+            sql.raw(`
+                create function retention_test_refuse() returns trigger language plpgsql as $$
+                begin
+                    if nextval('retention_test_deleted') > ${allowed} then
+                        raise exception 'delete refused';
+                    end if;
+                    return old;
+                end $$
+            `),
+        )
+        await t.db.execute(
+            sql.raw(
+                `create trigger retention_test_refuse before delete on ${table} for each row execute function retention_test_refuse()`,
+            ),
+        )
+        return () => t.db.execute(sql.raw(`drop trigger retention_test_refuse on ${table}`))
+    }
+
+    let allowDeletes: (() => Promise<unknown>) | undefined
+
+    afterEach(async () => {
+        await allowDeletes?.()
+        allowDeletes = undefined
+        await t.db.execute(sql.raw('drop function if exists retention_test_refuse'))
+        await t.db.execute(sql.raw('drop sequence if exists retention_test_deleted'))
+        // Whatever a test left over: the next one counts from none.
+        await retention.purge(now)
+    })
+
+    it('commits every batch: a failure keeps what the batches before it deleted', async () => {
+        await oldChallenges(OLD_CHALLENGES)
+        allowDeletes = await refuseDeletes('login_challenges', 1_000)
+
+        await expect(retention.purge(now)).rejects.toThrow()
+        expect((await remaining()).challenges).toHaveLength(OLD_CHALLENGES - 1_000)
+    })
+
+    it('keeps the deletes of one table when a later table fails', async () => {
+        const [user] = await t.db
+            .select({
+                id: users.id,
+            })
+            .from(users)
+        if (!user) throw new Error('no user row')
+        const old = await challenge(ago(25 * HOUR))
+        const revoked = await session(user.id, {
+            lastActiveAt: ago(91 * DAY),
+            revokedAt: ago(90 * DAY + HOUR),
+        })
+        allowDeletes = await refuseDeletes('sessions', 0)
+
+        await expect(retention.purge(now)).rejects.toThrow()
+        const left = await remaining()
+        expect(left.challenges).not.toContain(old)
+        expect(left.sessions).toContain(revoked)
+    })
+
+    it('stops after the batch under way on a shutdown', async () => {
+        await oldChallenges(OLD_CHALLENGES)
+        const stopping = new Retention(t.db, {
+            refreshTtlSec: REFRESH_TTL / 1_000,
+        } as never)
+        await stopping.beforeApplicationShutdown()
+
+        expect(await stopping.purge(now)).toEqual({
+            loginChallenges: 1_000,
+            sessions: 0,
+            authorizationCodes: 0,
+        })
+    })
+
+    it('stops when another replica takes the lock between batches, and reports what it deleted', async () => {
+        await oldChallenges(OLD_CHALLENGES)
+        const other = await t.app.get<pg.Pool>(PG_POOL).connect()
+        try {
+            const transaction = t.db.transaction.bind(t.db) as (...args: unknown[]) => Promise<unknown>
+            vi.spyOn(t.db, 'transaction').mockImplementationOnce((async (...args: unknown[]) => {
+                const result = await transaction(...args)
+                await other.query('begin')
+                await other.query('select pg_advisory_xact_lock(hashtext($1))', [
+                    RETENTION_LOCK,
+                ])
+                return result
+            }) as never)
+
+            expect(await retention.purge(now)).toEqual({
+                loginChallenges: 1_000,
+                sessions: 0,
+                authorizationCodes: 0,
+            })
+            expect((await remaining()).challenges).toHaveLength(OLD_CHALLENGES - 1_000)
+        } finally {
+            await other.query('rollback')
+            other.release()
+        }
     })
 })

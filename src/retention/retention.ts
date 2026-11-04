@@ -4,7 +4,7 @@ import { and, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { DB } from '../common/database/database.js'
 import { tokenConfig } from '../config/config.js'
 import { authorizationCodes, loginChallenges, sessions } from '../db/schema.js'
-import type { Db } from '../db/types.js'
+import type { Db, Tx } from '../db/types.js'
 
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
@@ -25,7 +25,7 @@ const PASS_INTERVAL_MS = HOUR_MS
 const FIRST_PASS_DELAY_MS = 60_000
 /** Rows per statement, well within the statement budget. */
 const BATCH_SIZE = 1_000
-/** `pg_try_advisory_xact_lock(hashtext(...))`: one replica purges at a time. */
+/** `pg_try_advisory_xact_lock(hashtext(...))`, taken per batch: one replica deletes at a time. */
 export const RETENTION_LOCK = 'id-api:retention'
 
 export type Purged = {
@@ -34,11 +34,17 @@ export type Purged = {
     authorizationCodes: number
 }
 
+type DeleteBatch = (tx: Tx) => PromiseLike<{
+    rowCount: number | null
+}>
+
 /**
- * Deletes sign-in data past its retention: hourly on every replica, one pass
- * at a time under an advisory lock. `sessions.parent_session_id` has no
- * foreign key: a site's session outlives an idle id-web session it signed in
- * from and goes by its own dates.
+ * Deletes sign-in data past its retention: hourly on every replica. Every batch
+ * commits by itself under an advisory lock, so a backlog holds no locks for long
+ * and a failure keeps what was deleted before it. A replica that finds the lock
+ * taken stops: the rest goes in the other replica's pass or the next hourly one.
+ * `sessions.parent_session_id` has no foreign key: a site's session outlives an
+ * idle id-web session it signed in from and goes by its own dates.
  */
 @Injectable()
 export class Retention implements OnApplicationBootstrap, BeforeApplicationShutdown {
@@ -62,20 +68,23 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
         await this.running
     }
 
-    /** One pass as of `now`, in one transaction; null when another replica holds the lock. */
+    /**
+     * One pass as of `now`: null when another replica holds the lock at the start;
+     * when it takes the lock later, the pass stops there and returns what it deleted.
+     */
     async purge(now: Date): Promise<Purged | null> {
         const before = (ms: number) => new Date(now.getTime() - ms)
         const challengeCutoff = before(LOGIN_CHALLENGE_RETENTION_MS)
         const revokedCutoff = before(REVOKED_SESSION_RETENTION_MS)
         const idleCutoff = before(this.token.refreshTtlSec * 1000 + EXPIRED_SESSION_RETENTION_MS)
         const codeCutoff = before(AUTHORIZATION_CODE_RETENTION_MS)
-        return this.db.transaction(async tx => {
-            const { rows } = await tx.execute<{
-                locked: boolean
-            }>(sql`select pg_try_advisory_xact_lock(hashtext(${RETENTION_LOCK})) as locked`)
-            if (!rows[0]?.locked) return null
-            return {
-                loginChallenges: await this.inBatches(() =>
+        const batches: [
+            keyof Purged,
+            DeleteBatch,
+        ][] = [
+            [
+                'loginChallenges',
+                tx =>
                     tx.delete(loginChallenges).where(
                         inArray(
                             loginChallenges.id,
@@ -88,8 +97,10 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
                                 .limit(BATCH_SIZE),
                         ),
                     ),
-                ),
-                sessions: await this.inBatches(() =>
+            ],
+            [
+                'sessions',
+                tx =>
                     tx.delete(sessions).where(
                         inArray(
                             sessions.id,
@@ -107,8 +118,10 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
                                 .limit(BATCH_SIZE),
                         ),
                     ),
-                ),
-                authorizationCodes: await this.inBatches(() =>
+            ],
+            [
+                'authorizationCodes',
+                tx =>
                     tx.delete(authorizationCodes).where(
                         inArray(
                             authorizationCodes.codeHash,
@@ -121,23 +134,37 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
                                 .limit(BATCH_SIZE),
                         ),
                     ),
-                ),
+            ],
+        ]
+        const purged: Purged = {
+            loginChallenges: 0,
+            sessions: 0,
+            authorizationCodes: 0,
+        }
+        let started = false
+        for (const [table, deleteBatch] of batches) {
+            // Until a batch comes back short; a shutdown stops between batches.
+            for (;;) {
+                const count = await this.inOwnTransaction(deleteBatch)
+                if (count === null) return started ? purged : null
+                started = true
+                purged[table] += count
+                if (this.stopped) return purged
+                if (count < BATCH_SIZE) break
             }
-        })
+        }
+        return purged
     }
 
-    /** Repeats a batch delete until one comes back short; a shutdown stops between batches. */
-    private async inBatches(
-        deleteBatch: () => Promise<{
-            rowCount: number | null
-        }>,
-    ) {
-        let deleted = 0
-        for (;;) {
-            const count = (await deleteBatch()).rowCount ?? 0
-            deleted += count
-            if (count < BATCH_SIZE || this.stopped) return deleted
-        }
+    /** One batch, committed by itself: the rows it deleted, or null when another replica holds the lock. */
+    private inOwnTransaction(deleteBatch: DeleteBatch) {
+        return this.db.transaction(async tx => {
+            const { rows } = await tx.execute<{
+                locked: boolean
+            }>(sql`select pg_try_advisory_xact_lock(hashtext(${RETENTION_LOCK})) as locked`)
+            if (!rows[0]?.locked) return null
+            return (await deleteBatch(tx)).rowCount ?? 0
+        })
     }
 
     private schedule(delayMs: number) {

@@ -11,10 +11,12 @@ const UNCHECKED_METRIC = 'rate_limit_fail_open_total'
 const UNCHECKED_HELP = 'Requests let through without a rate-limit check because Redis was unavailable.'
 /** Lifetime of the readiness probe's key. */
 const PROBE_TTL_MS = 10_000
+/** One warning per interval during an outage, like RedisThrottlerStorage; the counter counts each. */
+const WARN_INTERVAL_MS = 10_000
 
 /**
  * Fixed-window limits of the sign-in flow. With Redis down, slow or refusing
- * writes they refuse (503, logged with the limit, counted): an unchecked limit
+ * writes they refuse (503, counted, logged with the limit): an unchecked limit
  * would let anyone send codes to any address and spread guesses over any
  * number of challenges.
  */
@@ -24,6 +26,7 @@ export class RateLimiter implements OnModuleInit {
     /** One key per process, so replicas probe independently. */
     private readonly probeKey = `health:limits:${randomUUID()}`
     private unchecked: Counter | undefined
+    private lastWarn = 0
 
     constructor(
         @Inject(REDIS) private readonly redis: RedisClient,
@@ -53,14 +56,7 @@ export class RateLimiter implements OnModuleInit {
         try {
             reply = await bounded(this.redis, this.redis.consumeRate(`limit:${key}`, windowMs, limit, 0))
         } catch (error) {
-            this.unchecked?.inc()
-            this.logger.warn(
-                {
-                    key: key.split(':')[0],
-                    err: (error as Error).message,
-                },
-                'Rate limiter unavailable, refusing',
-            )
+            this.refused(key, error)
             throw new AppError('UNAVAILABLE', 'Sign-in is unavailable right now, retry later', undefined, {
                 cause: error,
             })
@@ -74,6 +70,20 @@ export class RateLimiter implements OnModuleInit {
                 },
             ])
         }
+    }
+
+    private refused(key: string, error: unknown) {
+        this.unchecked?.inc()
+        const now = Date.now()
+        if (now - this.lastWarn < WARN_INTERVAL_MS) return
+        this.lastWarn = now
+        this.logger.warn(
+            {
+                key: key.split(':')[0],
+                err: (error as Error).message,
+            },
+            'Rate limiter unavailable, refusing',
+        )
     }
 
     private async probe() {

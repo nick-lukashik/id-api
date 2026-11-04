@@ -21,7 +21,8 @@ Source: https://github.com/redis/agent-skills (official Redis agent skills: redi
 - Every cache key has a TTL: `set(key, value, { expiration: { type: 'EX', value: sec } })`. The old `{ EX }` and `{ NX }` options are deprecated; the write condition is now set with `condition: 'NX'`.
 - List caches are built on versioned keys: `<svc>:<entity>:list:v<ver>:<hash(query)>`. Invalidate with `INCR <svc>:<entity>:list:ver`, not by deleting by pattern.
 - The cache is not the source of truth. Validate values from Redis with a Zod schema. If Redis is down or the value didn't parse, read from the DB and write a warn to the log (at most one per interval during an outage, a metric counts each) instead of responding with a 500. A failed invalidation (`INCR` of the version) is retried, and until it lands that namespace is read from the DB: otherwise pages that miss a write made during the outage are served until their TTL.
-- The rate limiter fails open when Redis is down or slow: allow the request, log, count (`rate_limit_fail_open_total`).
+- The common throttler (`RedisThrottlerStorage`) fails open when Redis is down or slow: allow the request, log, count (`rate_limit_fail_open_total`).
+- The sign-in limiter (`src/login/rate-limiter.ts`) fails closed: an unchecked limit would let anyone send codes to any address. Refuse with 503, log, count (the same counter), and readiness fails.
 - Send independent commands as a batch with `multi().execAsPipeline()`. If you need atomicity, use `multi().exec()` or Lua.
 
 ## Lua (rate-limit storage for @nestjs/throttler)

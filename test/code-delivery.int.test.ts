@@ -122,6 +122,34 @@ const deliveries = async (result: string) => {
 }
 
 describe('HttpCodeDelivery', () => {
+    it('has a series at 0 for every result from the start, so a first failure is an increase', async () => {
+        delivery()
+        const metric = metrics.registry.getSingleMetric('auth_code_deliveries_total')
+        if (!metric) throw new Error('no metric auth_code_deliveries_total')
+        const { values } = await metric.get()
+        expect(
+            values
+                .map(value => ({
+                    result: value.labels.result,
+                    value: value.value,
+                }))
+                .sort((a, b) => String(a.result).localeCompare(String(b.result))),
+        ).toEqual([
+            {
+                result: 'accepted',
+                value: 0,
+            },
+            {
+                result: 'failed',
+                value: 0,
+            },
+            {
+                result: 'unreachable',
+                value: 0,
+            },
+        ])
+    })
+
     it('posts the code to notifications-api under /api/v1 with the service token', async () => {
         const sent = message()
         await expect(delivery().deliver(sent)).resolves.toBe('accepted')

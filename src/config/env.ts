@@ -60,7 +60,10 @@ export const envSchema = baseEnvSchema
         WEBAUTHN_RP_ID: z.string().min(1).default('nick-lukashik.com'),
         WEBAUTHN_RP_NAME: z.string().min(1).default('nick-lukashik'),
         WEBAUTHN_ORIGIN: z.url().default('https://id.nick-lukashik.com'),
-        /** Adding a passkey needs a session at most this old (a stolen older session cannot plant one). */
+        /**
+         * Adding a passkey or linking Google needs a session at most this old (a stolen
+         * older session cannot plant a key or attach a Google account of its own).
+         */
         PASSKEY_FRESH_SIGN_IN_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(900_000),
         /**
          * The platform's apps that sign in through id-web, as `client=redirect URI`
