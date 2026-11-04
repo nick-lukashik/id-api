@@ -44,11 +44,14 @@ export const envSchema = baseEnvSchema
         INTERNAL_API_TOKEN: secret,
         /**
          * Sign-in with Google: the OAuth client of Google Cloud Console and
-         * id-web's callback registered there. Off while any of the three is missing.
+         * id-web's callback registered there. Off while the client id or secret is missing.
          */
         GOOGLE_CLIENT_ID: optional(z.string().min(1)),
         GOOGLE_CLIENT_SECRET: optional(z.string().min(1)),
-        GOOGLE_REDIRECT_URI: optional(z.url()),
+        GOOGLE_REDIRECT_URI: z.preprocess(
+            value => (value === '' ? undefined : value),
+            z.url().default('https://id.nick-lukashik.com/login/google/callback'),
+        ),
         /**
          * Passkeys. The RP ID is the parent domain, so a passkey keeps working if
          * sign-in moves to another subdomain; ceremonies are accepted only from
@@ -66,7 +69,7 @@ export const envSchema = baseEnvSchema
          */
         OAUTH_CLIENTS: z
             .string()
-            .default('')
+            .default('landing-web=https://nick-lukashik.com/auth/callback')
             .transform((value, context) => {
                 const clients = new Map<string, string[]>()
                 for (const pair of value
