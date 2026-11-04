@@ -14,6 +14,7 @@ import * as schema from './db/schema.js'
 import { IdentityModule } from './identity.module.js'
 import { KeysModule } from './keys/keys.module.js'
 import { SigningKeys } from './keys/signing-keys.js'
+import { RetentionModule } from './retention/retention.module.js'
 import { userRegistered } from './users/users.service.js'
 
 type App = ConfigType<typeof appConfig>
@@ -107,6 +108,7 @@ type App = ConfigType<typeof appConfig>
             useFactory: (internal: ConfigType<typeof internalConfig>) => internal.token,
         }),
         IdentityModule,
+        RetentionModule,
     ],
 })
 export class AppModule {}
