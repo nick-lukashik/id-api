@@ -11,7 +11,14 @@ import { Metrics } from '../src/common/metrics/metrics.js'
 import { REDIS, type RedisClient } from '../src/common/redis/redis.client.js'
 import { env } from '../src/config/env.js'
 import type { Db } from '../src/db/types.js'
+import {
+    type GoogleCode,
+    type GoogleProfile,
+    GoogleProvider,
+    GoogleRejected,
+} from '../src/identities/google.provider.js'
 import { CodeDelivery, type CodeMessage } from '../src/login/code-delivery.js'
+import { TEST_ORIGIN, TEST_RP_ID } from './authenticator.js'
 
 /** Sign-in codes "sent" during a test, newest last. */
 export class RecordingDelivery extends CodeDelivery {
@@ -30,6 +37,46 @@ export class RecordingDelivery extends CodeDelivery {
     }
 }
 
+/**
+ * Google for tests: a code is `code-<sub>` and stands for the profile set
+ * with `account`; the nonce has to be the one of `account` too.
+ */
+export class FakeGoogle extends GoogleProvider {
+    readonly enabled = true
+    readonly authorizationEndpoint = 'https://accounts.google.test/o/oauth2/v2/auth'
+    readonly clientId = 'test-client.apps.googleusercontent.com'
+    readonly redirectUri = 'http://localhost:3100/login/google/callback'
+    private readonly accounts = new Map<
+        string,
+        GoogleProfile & {
+            nonce: string
+        }
+    >()
+
+    account(profile: GoogleProfile, nonce = 'n'.repeat(24)) {
+        this.accounts.set(profile.subject, {
+            ...profile,
+            nonce,
+        })
+        return {
+            code: `code-${profile.subject}`,
+            codeVerifier: 'v'.repeat(43),
+            nonce,
+        }
+    }
+
+    async verify({ code, nonce }: GoogleCode): Promise<GoogleProfile> {
+        const account = this.accounts.get(code.replace(/^code-/, ''))
+        if (!account || account.nonce !== nonce) throw new GoogleRejected('invalid_grant')
+        return {
+            subject: account.subject,
+            email: account.email,
+            emailVerified: account.emailVerified,
+            name: account.name,
+        }
+    }
+}
+
 const signingKey = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
 })
@@ -39,6 +86,9 @@ const signingKey = generateKeyPairSync('ec', {
     })
     .toString()
 export const INTERNAL_TOKEN = randomBytes(32).toString('hex')
+
+/** The redirect URI of the test app (`landing-web`). */
+export const SITE_CALLBACK = 'https://site.example.test/auth/callback'
 
 export type TestApp = Awaited<ReturnType<typeof startApp>>
 
@@ -62,12 +112,16 @@ export async function startApp(overrides: Record<string, string> = {}) {
         LOGIN_RESEND_COOLDOWN_MS: '0',
         NOTIFICATIONS_INTERNAL_TOKEN: randomBytes(32).toString('hex'),
         INTERNAL_API_TOKEN: INTERNAL_TOKEN,
+        WEBAUTHN_RP_ID: TEST_RP_ID,
+        WEBAUTHN_ORIGIN: TEST_ORIGIN,
+        OAUTH_CLIENTS: `landing-web=${SITE_CALLBACK}`,
         ...overrides,
     })
     env.reset()
 
     const { AppModule } = await import('../src/app.module.js')
     const delivery = new RecordingDelivery()
+    const google = new FakeGoogle()
     const moduleRef = await Test.createTestingModule({
         imports: [
             AppModule,
@@ -75,6 +129,8 @@ export async function startApp(overrides: Record<string, string> = {}) {
     })
         .overrideProvider(CodeDelivery)
         .useValue(delivery)
+        .overrideProvider(GoogleProvider)
+        .useValue(google)
         .compile()
     const app = moduleRef.createNestApplication<NestExpressApplication>({
         bufferLogs: true,
@@ -85,7 +141,9 @@ export async function startApp(overrides: Record<string, string> = {}) {
 
     const db = app.get<Db>(DB)
     const redis = app.get<RedisClient>(REDIS)
-    await db.execute(sql`truncate users, login_challenges, sessions, role_bindings, outbox, inbox cascade`)
+    await db.execute(
+        sql`truncate users, login_challenges, sessions, role_bindings, identities, passkeys, authorization_codes, outbox, inbox cascade`,
+    )
     await redis.flushDb()
     await app.listen(0, '127.0.0.1')
     const { registry } = app.get(Metrics)
@@ -95,6 +153,7 @@ export async function startApp(overrides: Record<string, string> = {}) {
         db,
         redis,
         delivery,
+        google,
         url: await app.getUrl(),
         http: () => request(app.getHttpServer()),
         /** Sum of a metric's series that carry `labels` (0 when none). */

@@ -12,6 +12,8 @@ import { RolesService } from '../users/roles.service.js'
 import { UsersService } from '../users/users.service.js'
 import { RefreshStore } from './refresh-store.js'
 
+export type AuthMethod = 'email' | 'google' | 'passkey' | 'sso'
+
 export type SessionTokens = {
     accessToken: string
     accessExpiresAt: string
@@ -32,13 +34,17 @@ export class SessionsService {
         private readonly roles: RolesService,
     ) {}
 
-    /** The session row, inside the sign-in transaction. */
-    async create(tx: Tx, userId: string, client: ClientContext) {
+    /**
+     * The session row, inside the sign-in transaction. `clientId` names the app
+     * a session belongs to (sign-in through id-web from another site).
+     */
+    async create(tx: Tx, userId: string, client: ClientContext, method: AuthMethod, clientId: string | null = null) {
         const [row] = await tx
             .insert(sessions)
             .values({
                 userId,
-                authMethod: 'email',
+                authMethod: method,
+                clientId,
                 ip: client.ip,
                 userAgent: client.userAgent,
             })
@@ -125,6 +131,15 @@ export class SessionsService {
             )
     }
 
+    /** A live session of this user, or undefined. */
+    async active(userId: string, sessionId: string) {
+        const [session] = await this.db
+            .select()
+            .from(sessions)
+            .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+        return session
+    }
+
     list(userId: string) {
         return this.db
             .select({
@@ -133,6 +148,8 @@ export class SessionsService {
                 lastActiveAt: sessions.lastActiveAt,
                 userAgent: sessions.userAgent,
                 ip: sessions.ip,
+                authMethod: sessions.authMethod,
+                clientId: sessions.clientId,
             })
             .from(sessions)
             .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))

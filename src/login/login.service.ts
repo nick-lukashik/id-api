@@ -119,7 +119,7 @@ export class LoginService {
             if (found.status !== 'active') throw new AppError('FORBIDDEN', 'Account suspended')
             return {
                 user: found,
-                sessionId: await this.sessions.create(tx, found.id, client),
+                sessionId: await this.sessions.create(tx, found.id, client, 'email'),
             }
         })
         this.relay.kick()

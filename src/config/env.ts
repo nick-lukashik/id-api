@@ -9,6 +9,9 @@ import {
 } from '../common/config/define-env.js'
 
 const secret = z.string().min(32, 'at least 32 characters')
+/** Optional: an empty value (`KEY=` in .env) counts as unset. */
+const optional = <T extends z.ZodType>(schema: T) =>
+    z.preprocess(value => (value === '' ? undefined : value), schema.optional())
 
 /** Every variable this service reads. Nothing else touches process.env. */
 export const envSchema = baseEnvSchema
@@ -39,6 +42,57 @@ export const envSchema = baseEnvSchema
         NOTIFICATIONS_INTERNAL_TOKEN: secret,
         /** This service's token for in-cluster callers (notifications-api reads users). */
         INTERNAL_API_TOKEN: secret,
+        /**
+         * Sign-in with Google: the OAuth client of Google Cloud Console and
+         * id-web's callback registered there. Off while any of the three is missing.
+         */
+        GOOGLE_CLIENT_ID: optional(z.string().min(1)),
+        GOOGLE_CLIENT_SECRET: optional(z.string().min(1)),
+        GOOGLE_REDIRECT_URI: optional(z.url()),
+        /**
+         * Passkeys. The RP ID is the parent domain, so a passkey keeps working if
+         * sign-in moves to another subdomain; ceremonies are accepted only from
+         * WEBAUTHN_ORIGIN (id-web).
+         */
+        WEBAUTHN_RP_ID: z.string().min(1).default('nick-lukashik.com'),
+        WEBAUTHN_RP_NAME: z.string().min(1).default('nick-lukashik'),
+        WEBAUTHN_ORIGIN: z.url().default('https://id.nick-lukashik.com'),
+        /** Adding a passkey needs a session at most this old (a stolen older session cannot plant one). */
+        PASSKEY_FRESH_SIGN_IN_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(900_000),
+        /**
+         * The platform's apps that sign in through id-web, as `client=redirect URI`
+         * pairs separated by commas (`landing-web=https://nick-lukashik.com/auth/callback`).
+         * A redirect URI must match exactly.
+         */
+        OAUTH_CLIENTS: z
+            .string()
+            .default('')
+            .transform((value, context) => {
+                const clients = new Map<string, string[]>()
+                for (const pair of value
+                    .split(',')
+                    .map(item => item.trim())
+                    .filter(Boolean)) {
+                    const [id = '', uri = ''] = pair.split('=', 2)
+                    if (!/^[a-z][a-z0-9-]{2,40}$/.test(id) || !URL.canParse(uri)) {
+                        context.addIssue({
+                            code: 'custom',
+                            message: `not a client=redirect URI pair: ${pair}`,
+                        })
+                        return z.NEVER
+                    }
+                    clients.set(id, [
+                        ...(clients.get(id) ?? []),
+                        uri,
+                    ])
+                }
+                return [
+                    ...clients,
+                ].map(([id, redirectUris]) => ({
+                    id,
+                    redirectUris,
+                }))
+            }),
     })
 
 export type Env = z.output<typeof envSchema>

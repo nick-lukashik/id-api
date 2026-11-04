@@ -56,6 +56,8 @@ export class MeController {
                 lastActiveAt: row.lastActiveAt.toISOString(),
                 userAgent: row.userAgent,
                 ip: row.ip,
+                authMethod: row.authMethod,
+                clientId: row.clientId,
                 current: row.id === caller.sessionId,
             })),
         }

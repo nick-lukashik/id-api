@@ -34,20 +34,30 @@ export class UsersService {
     async findOrCreate(tx: Tx, email: string, locale: Locale): Promise<UserRow> {
         const [existing] = await tx.select().from(users).where(eq(users.email, email))
         if (existing) return existing
+        const created = await this.create(tx, email, locale, null)
+        if (created) return created
+        // A concurrent sign-in of the same email won; use its row.
+        const [winner] = await tx.select().from(users).where(eq(users.email, email))
+        if (!winner) throw new Error('user vanished during sign-in')
+        return winner
+    }
+
+    /**
+     * A new user with an email another sign-in method has verified (Google),
+     * or null when the email already has an account: that is linked only by
+     * its owner, signed in.
+     */
+    async create(tx: Tx, email: string, locale: Locale, displayName: string | null): Promise<UserRow | null> {
         const [created] = await tx
             .insert(users)
             .values({
                 email,
                 locale,
+                displayName: displayName?.trim().slice(0, 80) || null,
             })
             .onConflictDoNothing()
             .returning()
-        if (!created) {
-            // A concurrent sign-in of the same email won; use its row.
-            const [winner] = await tx.select().from(users).where(eq(users.email, email))
-            if (!winner) throw new Error('user vanished during sign-in')
-            return winner
-        }
+        if (!created) return null
         await enqueueEvent(
             tx,
             userRegistered.create({

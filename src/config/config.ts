@@ -51,3 +51,24 @@ export const internalConfig = registerAs('internal', () => ({
     notificationsToken: env().NOTIFICATIONS_INTERNAL_TOKEN,
     token: env().INTERNAL_API_TOKEN,
 }))
+
+export const googleConfig = registerAs('google', () => ({
+    clientId: env().GOOGLE_CLIENT_ID,
+    clientSecret: env().GOOGLE_CLIENT_SECRET,
+    redirectUri: env().GOOGLE_REDIRECT_URI,
+}))
+
+export const webauthnConfig = registerAs('webauthn', () => ({
+    rpId: env().WEBAUTHN_RP_ID,
+    rpName: env().WEBAUTHN_RP_NAME,
+    origin: env().WEBAUTHN_ORIGIN,
+    freshSignInMs: env().PASSKEY_FRESH_SIGN_IN_MS,
+    /** A challenge lives this long; the browser ceremony has the same timeout. */
+    challengeTtlMs: 300_000,
+    maxPerUser: 10,
+}))
+
+export const oauthConfig = registerAs('oauth', () => ({
+    clients: env().OAUTH_CLIENTS,
+    codeTtlMs: 60_000,
+}))

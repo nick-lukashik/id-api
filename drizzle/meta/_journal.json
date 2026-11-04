@@ -8,6 +8,13 @@
       "when": 1793764421215,
       "tag": "0000_short_miss_america",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793793803543,
+      "tag": "0001_sign_in_methods",
+      "breakpoints": true
     }
   ]
 }
