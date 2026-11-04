@@ -28,7 +28,8 @@ export const envSchema = baseEnvSchema
         SIGNING_KEY_PEM: z.string().includes('BEGIN PRIVATE KEY'),
         /** Public JWKs still accepted during a rotation, JSON array. */
         PREVIOUS_PUBLIC_KEYS: z.string().default('[]'),
-        ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+        /** Over the 60 s before expiry at which id-web and the other sites refresh: at 60 every request would. */
+        ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(61).max(900).default(300),
         REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3_600).max(7_776_000).default(2_592_000),
         /** Window in which the previous refresh token gets the token already issued instead of burning the session. */
         REFRESH_GRACE_MS: z.coerce.number().int().min(0).max(60_000).default(20_000),

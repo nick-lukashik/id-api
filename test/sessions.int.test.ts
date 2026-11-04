@@ -408,3 +408,123 @@ describe('site sessions and the sign-out of their id-web session', () => {
         expect((await revocation(site.body.sessionId))?.revokedReason).toBe('logout')
     })
 })
+
+describe('an outage', () => {
+    const refresh = (refreshToken: string) =>
+        t.http().post('/api/v1/sessions/refresh').send({
+            refreshToken,
+        })
+
+    // Each read of a refresh in turn. `email` keeps the signed-in users apart.
+    it.each([
+        [
+            'the session',
+            'select',
+            1,
+        ],
+        [
+            'the user',
+            'select',
+            2,
+        ],
+        [
+            'the roles',
+            'select',
+            3,
+        ],
+        [
+            'the grants',
+            'selectDistinct',
+            1,
+        ],
+    ] as const)('a refresh that fails on reading %s leaves the token as it was', async (_, method, failing) => {
+        const session = await signIn(`postgres-down-${method}-${failing}@example.com`)
+        const read = t.db[method].bind(t.db) as (...args: unknown[]) => unknown
+        let reads = 0
+        const down = vi.spyOn(t.db, method).mockImplementation(((...args: unknown[]) => {
+            reads += 1
+            if (reads === failing) throw new Error('Postgres is gone')
+            return read(...args)
+        }) as never)
+        await refresh(session.refreshToken).expect(500)
+        down.mockRestore()
+
+        // Still the current token, not one in its grace window: a later try cannot read as reuse.
+        expect(await t.redis.hGet(`rt:${session.sessionId}`, 'cur')).toBe(
+            createHash('sha256').update(session.refreshToken).digest('hex'),
+        )
+        await refresh(session.refreshToken).expect(200)
+    })
+
+    it('a refresh that cannot note the last activity still succeeds', async () => {
+        const session = await signIn('last-active-down@example.com')
+        const update = t.db.update.bind(t.db)
+        // Only the sessions table: the outbox relay writes in the background too.
+        let tried = false
+        const down = vi.spyOn(t.db, 'update').mockImplementation(((table: Parameters<typeof update>[0]) => {
+            if (table !== sessions) return update(table)
+            tried = true
+            throw new Error('Postgres is gone')
+        }) as typeof t.db.update)
+        const { body } = await refresh(session.refreshToken).expect(200)
+        expect(tried).toBe(true)
+        down.mockRestore()
+        expect(body.refreshToken).not.toBe(session.refreshToken)
+    })
+
+    it('a Postgres too slow to answer in time leaves the token as it was', async () => {
+        const session = await signIn('postgres-slow@example.com')
+        const select = t.db.select.bind(t.db)
+        const now = Date.now
+        const slow = vi.spyOn(t.db, 'select').mockImplementationOnce(((...args: Parameters<typeof select>) => {
+            // The clock moves on while the read takes its time.
+            vi.spyOn(Date, 'now').mockImplementation(() => now() + 9_000)
+            return select(...args)
+        }) as typeof t.db.select)
+        await refresh(session.refreshToken).expect(503)
+        vi.mocked(Date.now).mockRestore()
+        slow.mockRestore()
+        expect(await t.redis.hGet(`rt:${session.sessionId}`, 'cur')).toBe(
+            createHash('sha256').update(session.refreshToken).digest('hex'),
+        )
+        await refresh(session.refreshToken).expect(200)
+    })
+
+    it('a reply of Redis that got lost does not lose the token', async () => {
+        const session = await signIn('redis-reply-lost@example.com')
+        const run = t.redis.eval.bind(t.redis)
+        const lost = vi.spyOn(t.redis, 'eval').mockImplementationOnce((async (...args: Parameters<typeof run>) => {
+            await run(...args)
+            throw new Error('Redis command exceeded 500 ms')
+        }) as typeof t.redis.eval)
+        const { body } = await refresh(session.refreshToken).expect(200)
+        lost.mockRestore()
+        // The token Redis did turn to: the session goes on with it.
+        await refresh(body.refreshToken).expect(200)
+    })
+
+    it.each([
+        [
+            'refresh',
+            '/api/v1/sessions/refresh',
+        ],
+        [
+            'sign-out',
+            '/api/v1/sessions/logout',
+        ],
+    ])('a %s without Redis answers 503, the answer for a dependency that is down', async (_, path) => {
+        const session = await signIn(`redis-down-${path.length}@example.com`)
+        const down = vi.spyOn(t.redis, 'eval').mockImplementation(() => {
+            throw new Error('The client is closed')
+        })
+        const { body } = await t
+            .http()
+            .post(path)
+            .send({
+                refreshToken: session.refreshToken,
+            })
+            .expect(503)
+        down.mockRestore()
+        expect(body.code).toBe('UNAVAILABLE')
+    })
+})

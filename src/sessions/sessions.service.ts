@@ -7,13 +7,13 @@ import { AppError } from '../common/http/app-error.js'
 import { cursorCodec } from '../common/http/cursor.js'
 import { tokenConfig } from '../config/config.js'
 import { sessions } from '../db/schema.js'
-import type { Db, SessionRow, Tx } from '../db/types.js'
+import type { Db, SessionRow, Tx, UserRow } from '../db/types.js'
 import { SigningKeys } from '../keys/signing-keys.js'
 import type { ClientContext } from '../users/client-context.js'
 import { GrantsService } from '../users/grants.service.js'
 import { RolesService } from '../users/roles.service.js'
 import { UsersService } from '../users/users.service.js'
-import { RefreshStore } from './refresh-store.js'
+import { familyOf, RefreshStore } from './refresh-store.js'
 
 export type AuthMethod = 'email' | 'google' | 'passkey' | 'sso'
 
@@ -25,6 +25,9 @@ export type SessionTokens = {
 }
 
 type RevokedReason = NonNullable<SessionRow['revokedReason']>
+/** The token turns only with time to answer: a request has 10 s, and id-web waits as long. */
+const ROTATE_DEADLINE_MS = 8_000
+type Claims = Omit<Parameters<SigningKeys['sign']>[0], 'sessionId'>
 
 const PAGE_SIZE = 50
 const cursor = cursorCodec(
@@ -82,12 +85,22 @@ export class SessionsService {
 
     /** The first token pair of a committed session. */
     async issue(sessionId: string, userId: string): Promise<SessionTokens> {
+        const claims = await this.claimsOf(await this.users.get(this.db, userId))
         const refreshToken = await this.refresh.issue(sessionId, this.config.refreshTtlSec)
-        return this.tokens(sessionId, userId, refreshToken)
+        return this.signed(sessionId, claims, refreshToken)
     }
 
-    /** Rotates the refresh token; a reused one burns the session. */
+    /**
+     * Rotates the refresh token; a reused one burns the session. All it needs from
+     * Postgres is read first: a refresh that fails on it leaves the token as it was,
+     * and an outage longer than the grace window cannot read as reuse afterwards.
+     */
     async rotate(presented: string): Promise<SessionTokens> {
+        const started = Date.now()
+        const sessionId = familyOf(presented)
+        const state = sessionId ? await this.refreshState(sessionId) : undefined
+        // Too late to answer in time (a slow Postgres): the caller has given up and keeps this token.
+        if (Date.now() - started > ROTATE_DEADLINE_MS) throw new AppError('UNAVAILABLE', 'Sessions are slow, retry')
         const rotated = await this.refresh.rotate(presented, {
             ttlSec: this.config.refreshTtlSec,
             graceMs: this.config.refreshGraceMs,
@@ -108,16 +121,43 @@ export class SessionsService {
         }
         if (rotated.result !== 'OK' && rotated.result !== 'RETRY') throw sessionEnded()
 
-        const [session] = await this.db
-            .select()
-            .from(sessions)
-            .where(and(eq(sessions.id, rotated.sessionId), isNull(sessions.revokedAt)))
-        if (!session) {
+        if (!state) {
             await this.refresh.revoke([
                 rotated.sessionId,
             ])
             throw sessionEnded()
         }
+        if ('ended' in state) {
+            await this.revoke(
+                [
+                    rotated.sessionId,
+                ],
+                state.ended,
+            )
+            throw sessionEnded()
+        }
+        void this.noteActivity(rotated.sessionId)
+        return this.signed(rotated.sessionId, state.claims, rotated.token)
+    }
+
+    /**
+     * What a refresh of this session comes to, as Postgres has it: undefined for a
+     * session that is gone, the reason for one that has to end, or the token's claims.
+     */
+    private async refreshState(sessionId: string): Promise<
+        | {
+              ended: RevokedReason
+          }
+        | {
+              claims: Claims
+          }
+        | undefined
+    > {
+        const [session] = await this.db
+            .select()
+            .from(sessions)
+            .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)))
+        if (!session) return undefined
         // A site's session ends with the id-web session it signed in from, also one a sign-out missed.
         if (session.parentSessionId) {
             const [parent] = await this.db
@@ -127,33 +167,39 @@ export class SessionsService {
                 })
                 .from(sessions)
                 .where(eq(sessions.id, session.parentSessionId))
-            if (!parent || parent.revokedAt) {
-                await this.revoke(
-                    [
-                        session.id,
-                    ],
-                    parent?.revokedReason ?? 'logout',
-                )
-                throw sessionEnded()
-            }
+            if (!parent || parent.revokedAt)
+                return {
+                    ended: parent?.revokedReason ?? 'logout',
+                }
         }
         const user = await this.users.get(this.db, session.userId)
-        if (user.status !== 'active') {
-            await this.revoke(
-                [
-                    session.id,
-                ],
-                'admin',
-            )
-            throw sessionEnded()
+        if (user.status !== 'active')
+            return {
+                ended: 'admin',
+            }
+        return {
+            claims: await this.claimsOf(user),
         }
-        await this.db
-            .update(sessions)
-            .set({
-                lastActiveAt: new Date(),
-            })
-            .where(eq(sessions.id, session.id))
-        return this.tokens(session.id, session.userId, rotated.token)
+    }
+
+    /** Only for the sessions list: the token has already turned, so this must not fail or delay the refresh. */
+    private async noteActivity(sessionId: string) {
+        try {
+            await this.db
+                .update(sessions)
+                .set({
+                    lastActiveAt: new Date(),
+                })
+                .where(eq(sessions.id, sessionId))
+        } catch (error) {
+            this.logger.warn(
+                {
+                    sessionId,
+                    err: error,
+                },
+                'Last activity of a session not noted',
+            )
+        }
     }
 
     /**
@@ -322,15 +368,21 @@ export class SessionsService {
             .where(and(inArray(sessions.id, ids), isNull(sessions.revokedAt)))
     }
 
-    private async tokens(sessionId: string, userId: string, refreshToken: string): Promise<SessionTokens> {
-        const user = await this.users.get(this.db, userId)
+    /** What an access token says of the user: read from Postgres at every issuance. */
+    private async claimsOf(user: Pick<UserRow, 'id' | 'accessVersion'>): Promise<Claims> {
+        return {
+            userId: user.id,
+            roles: await this.roles.rolesOf(this.db, user.id),
+            grants: await this.grants.activeOf(this.db, user.id),
+            accessVersion: user.accessVersion,
+        }
+    }
+
+    private async signed(sessionId: string, claims: Claims, refreshToken: string): Promise<SessionTokens> {
         const access = await this.keys.sign(
             {
-                userId,
+                ...claims,
                 sessionId,
-                roles: await this.roles.rolesOf(this.db, userId),
-                grants: await this.grants.activeOf(this.db, userId),
-                accessVersion: user.accessVersion,
             },
             new Date(),
         )

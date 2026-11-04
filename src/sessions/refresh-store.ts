@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common'
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 import { HealthRegistry } from '../common/health/health.registry.js'
+import { AppError } from '../common/http/app-error.js'
 import { bounded, REDIS, type RedisClient } from '../common/redis/redis.client.js'
 
 /**
@@ -91,6 +92,8 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 @Injectable()
 export class RefreshStore implements OnModuleInit {
+    private readonly logger = new Logger('RefreshStore')
+
     constructor(
         @Inject(REDIS) private readonly redis: RedisClient,
         private readonly health: HealthRegistry,
@@ -102,11 +105,33 @@ export class RefreshStore implements OnModuleInit {
         })
     }
 
+    /** A command of this store: without Redis no session can be refreshed or ended, and that is a 503. */
+    private async available<T>(command: () => Promise<T>) {
+        try {
+            return await bounded(this.redis, command())
+        } catch (error) {
+            this.logger.warn(
+                {
+                    err: error,
+                },
+                'Redis unavailable for a session',
+            )
+            throw new AppError('UNAVAILABLE', 'Sessions are unavailable, retry')
+        }
+    }
+
+    private async twice<T>(command: () => Promise<T>) {
+        try {
+            return await bounded(this.redis, command())
+        } catch {
+            return this.available(command)
+        }
+    }
+
     /** Starts a session's refresh family and returns its first token. */
     async issue(sessionId: string, ttlSec: number) {
         const token = mint(sessionId)
-        await bounded(
-            this.redis,
+        await this.available(() =>
             this.redis.multi().hSet(key(sessionId), 'cur', hash(token)).expire(key(sessionId), ttlSec).exec(),
         )
         return token
@@ -127,8 +152,9 @@ export class RefreshStore implements OnModuleInit {
             }
         const next = mint(sessionId)
         const now = Date.now()
-        const reply = (await bounded(
-            this.redis,
+        // Once more on a failure: if Redis did turn the token and only the reply was lost,
+        // the same request now finds it in its grace window and gets the token issued.
+        const turn = () =>
             this.redis.eval(ROTATE, {
                 keys: [
                     key(sessionId),
@@ -144,8 +170,8 @@ export class RefreshStore implements OnModuleInit {
                     String(now),
                     String(now - options.ttlSec * 1_000),
                 ],
-            }),
-        )) as [
+            })
+        const reply = (await this.twice(turn)) as [
             'OK' | 'RETRY' | 'REUSE' | 'DEAD',
             string | undefined,
         ]
@@ -169,8 +195,7 @@ export class RefreshStore implements OnModuleInit {
     async sessionOf(presented: string): Promise<string | null> {
         const sessionId = familyOf(presented)
         if (!sessionId) return null
-        const held = await bounded(
-            this.redis,
+        const held = await this.available(() =>
             this.redis.eval(HOLDS, {
                 keys: [
                     key(sessionId),
@@ -186,8 +211,7 @@ export class RefreshStore implements OnModuleInit {
 
     async revoke(sessionIds: string[]) {
         if (sessionIds.length === 0) return
-        await bounded(
-            this.redis,
+        await this.available(() =>
             this.redis.del(
                 sessionIds.flatMap(sid => [
                     key(sid),
@@ -203,7 +227,7 @@ const key = (sid: string) => `rt:${sid}`
 const graceKey = (sid: string) => `rtg:${sid}`
 const supersededKey = (sid: string) => `rtp:${sid}`
 /** The session id a well-formed token starts with, or null. */
-const familyOf = (token: string) => {
+export const familyOf = (token: string) => {
     const sessionId = token.split('.')[0] ?? ''
     return SESSION_ID.test(sessionId) && token.length <= 200 ? sessionId : null
 }
