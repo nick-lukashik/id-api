@@ -14,6 +14,13 @@ export type CodeMessage = {
 
 export type DeliveryStatus = 'accepted' | 'failed'
 
+/** The `result` label of auth_code_deliveries_total. */
+const RESULTS = [
+    'accepted',
+    'failed',
+    'unreachable',
+] as const
+
 /** How the code reaches the person; tests swap it for a recorder. */
 export abstract class CodeDelivery {
     abstract deliver(message: CodeMessage): Promise<DeliveryStatus>
@@ -41,6 +48,14 @@ export class HttpCodeDelivery extends CodeDelivery {
                 'result',
             ],
         })
+        // Every series from the start, so a first failure is an increase Prometheus can see.
+        for (const result of RESULTS)
+            this.deliveries.inc(
+                {
+                    result,
+                },
+                0,
+            )
     }
 
     async deliver(message: CodeMessage): Promise<DeliveryStatus> {
@@ -51,7 +66,7 @@ export class HttpCodeDelivery extends CodeDelivery {
         return result === 'accepted' ? 'accepted' : 'failed'
     }
 
-    private async post(message: CodeMessage): Promise<DeliveryStatus | 'unreachable'> {
+    private async post(message: CodeMessage): Promise<(typeof RESULTS)[number]> {
         let response: Response
         try {
             // NOTIFICATIONS_URL is the bare origin; notifications-api serves under the global prefix `api`.
