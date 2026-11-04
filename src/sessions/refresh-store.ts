@@ -4,12 +4,20 @@ import { HealthRegistry } from '../common/health/health.registry.js'
 import { bounded, REDIS, type RedisClient } from '../common/redis/redis.client.js'
 
 /**
+ * Superseded hashes kept per session. Redis runs `noeviction`: with a 5-minute
+ * access token and a 30-day refresh token a session in constant use would
+ * otherwise collect about 8640 of them. 512 are about 42 hours of such use.
+ */
+const SUPERSEDED_KEPT = 512
+
+/**
  * Refresh-token rotation in one atomic Lua script.
  *
  * Per session: `rt:<sid>` holds sha256(current token), TTL = refresh lifetime;
  * `rtg:<sid>` holds "<sha256(previous)>:<current plaintext>" for the grace window;
- * `rtp:<sid>` holds sha256 of every superseded token, scored by when it was
- * superseded, for the refresh lifetime (older ones would have expired anyway).
+ * `rtp:<sid>` holds sha256 of the newest SUPERSEDED_KEPT superseded tokens, scored
+ * by when each was superseded, for the refresh lifetime (older ones would have
+ * expired anyway).
  *
  * Presented token:
  * - == current                → OK: rotate, keep a grace entry for the old token;
@@ -17,6 +25,9 @@ import { bounded, REDIS, type RedisClient } from '../common/redis/redis.client.j
  * - superseded, family alive  → REUSE: all keys deleted, the session is burned;
  * - anything else             → DEAD: revoked, expired or never issued; nothing changes,
  *                               so a session id alone (the `sid` claim) burns nothing.
+ *
+ * A token older than the cap counts as DEAD, not REUSE: replaying one that old
+ * is refused but no longer burns the session.
  *
  * The grace entry keeps the current plaintext for at most the grace window
  * inside Redis of the cluster; it is never logged.
@@ -32,6 +43,7 @@ if cur == ARGV[1] then
   end
   redis.call('ZADD', KEYS[3], ARGV[6], ARGV[1])
   redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', '(' .. ARGV[7])
+  redis.call('ZREMRANGEBYRANK', KEYS[3], 0, ${-SUPERSEDED_KEPT - 1})
   redis.call('EXPIRE', KEYS[3], ARGV[5])
   return { 'OK', ARGV[3] }
 end

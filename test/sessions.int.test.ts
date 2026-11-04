@@ -154,6 +154,38 @@ describe('refresh tokens', () => {
         expect((await store.rotate(first, options)).result).toBe('DEAD')
         expect((await store.rotate(second.token, options)).result).toBe('OK')
     })
+
+    it('remembers the newest 512 superseded tokens only: an older one is dead, not reuse', async () => {
+        const store = t.app.get(RefreshStore)
+        const options = {
+            ttlSec: 2_592_000,
+            graceMs: 0,
+        }
+        const sessionId = randomUUID()
+        // A clock that moves on: rotations within one millisecond would tie on the score.
+        let now = Date.now()
+        vi.spyOn(Date, 'now').mockImplementation(() => now)
+        const tokens = [
+            await store.issue(sessionId, options.ttlSec),
+        ]
+        for (let rotation = 0; rotation < 513; rotation++) {
+            now += 1_000
+            const rotated = await store.rotate(tokens.at(-1) as string, options)
+            if (rotated.result !== 'OK') throw new Error(`rotation ${rotation}: ${rotated.result}`)
+            tokens.push(rotated.token)
+        }
+        expect(await t.redis.zCard(`rtp:${sessionId}`)).toBe(512)
+
+        // Past the cap: refused, and the family lives on.
+        expect((await store.rotate(tokens[0] as string, options)).result).toBe('DEAD')
+        expect(await store.sessionOf(tokens.at(-1) as string)).toBe(sessionId)
+        expect(await t.redis.zCard(`rtp:${sessionId}`)).toBe(512)
+
+        // The oldest one still kept burns the family.
+        expect((await store.rotate(tokens[1] as string, options)).result).toBe('REUSE')
+        expect(await store.sessionOf(tokens.at(-1) as string)).toBeNull()
+        expect(await t.redis.exists(`rtp:${sessionId}`)).toBe(0)
+    })
 })
 
 describe('session list', () => {
