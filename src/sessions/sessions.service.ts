@@ -25,6 +25,8 @@ export type SessionTokens = {
 }
 
 type RevokedReason = NonNullable<SessionRow['revokedReason']>
+/** The token turns only with time to answer: a request has 10 s, and id-web waits as long. */
+const ROTATE_DEADLINE_MS = 8_000
 type Claims = Omit<Parameters<SigningKeys['sign']>[0], 'sessionId'>
 
 const PAGE_SIZE = 50
@@ -94,8 +96,11 @@ export class SessionsService {
      * and an outage longer than the grace window cannot read as reuse afterwards.
      */
     async rotate(presented: string): Promise<SessionTokens> {
+        const started = Date.now()
         const sessionId = familyOf(presented)
         const state = sessionId ? await this.refreshState(sessionId) : undefined
+        // Too late to answer in time (a slow Postgres): the caller has given up and keeps this token.
+        if (Date.now() - started > ROTATE_DEADLINE_MS) throw new AppError('UNAVAILABLE', 'Sessions are slow, retry')
         const rotated = await this.refresh.rotate(presented, {
             ttlSec: this.config.refreshTtlSec,
             graceMs: this.config.refreshGraceMs,
@@ -131,7 +136,7 @@ export class SessionsService {
             )
             throw sessionEnded()
         }
-        await this.noteActivity(rotated.sessionId)
+        void this.noteActivity(rotated.sessionId)
         return this.signed(rotated.sessionId, state.claims, rotated.token)
     }
 
@@ -177,7 +182,7 @@ export class SessionsService {
         }
     }
 
-    /** Only for the sessions list: the token has already turned, so this must not fail the refresh. */
+    /** Only for the sessions list: the token has already turned, so this must not fail or delay the refresh. */
     private async noteActivity(sessionId: string) {
         try {
             await this.db

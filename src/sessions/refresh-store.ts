@@ -120,6 +120,14 @@ export class RefreshStore implements OnModuleInit {
         }
     }
 
+    private async twice<T>(command: () => Promise<T>) {
+        try {
+            return await bounded(this.redis, command())
+        } catch {
+            return this.available(command)
+        }
+    }
+
     /** Starts a session's refresh family and returns its first token. */
     async issue(sessionId: string, ttlSec: number) {
         const token = mint(sessionId)
@@ -144,7 +152,9 @@ export class RefreshStore implements OnModuleInit {
             }
         const next = mint(sessionId)
         const now = Date.now()
-        const reply = (await this.available(() =>
+        // Once more on a failure: if Redis did turn the token and only the reply was lost,
+        // the same request now finds it in its grace window and gets the token issued.
+        const turn = () =>
             this.redis.eval(ROTATE, {
                 keys: [
                     key(sessionId),
@@ -160,8 +170,8 @@ export class RefreshStore implements OnModuleInit {
                     String(now),
                     String(now - options.ttlSec * 1_000),
                 ],
-            }),
-        )) as [
+            })
+        const reply = (await this.twice(turn)) as [
             'OK' | 'RETRY' | 'REUSE' | 'DEAD',
             string | undefined,
         ]
