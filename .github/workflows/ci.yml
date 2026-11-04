@@ -13,7 +13,7 @@ permissions: {}
 jobs:
     # Job id "ci" gives the required check "ci / verify".
     ci:
-        uses: nick-lukashik/.github/.github/workflows/build.yml@v1
+        uses: nick-lukashik/.github/.github/workflows/build.yml@v1.1.0 # the first with github-packages
         permissions:
             contents: read
             packages: write
