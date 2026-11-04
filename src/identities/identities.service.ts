@@ -1,9 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common'
+import type { ConfigType } from '@nestjs/config'
+import type { AccessClaims } from '@nick-lukashik/auth'
 import type { Locale } from '@nick-lukashik/contracts'
 import { and, eq } from 'drizzle-orm'
 import { DB } from '../common/database/database.js'
 import { AppError } from '../common/http/app-error.js'
 import { OutboxRelay } from '../common/messaging/outbox-relay.js'
+import { webauthnConfig } from '../config/config.js'
 import { identities, users } from '../db/schema.js'
 import type { Db, Tx } from '../db/types.js'
 import { RateLimiter } from '../login/rate-limiter.js'
@@ -19,7 +22,7 @@ import {
     GoogleUnavailable,
 } from './google.provider.js'
 
-const refused = (path: string, reason: string, code: 'UNPROCESSABLE' | 'CONFLICT' = 'UNPROCESSABLE') =>
+const refused = (path: string, reason: string, code: 'UNPROCESSABLE' | 'CONFLICT' | 'FORBIDDEN' = 'UNPROCESSABLE') =>
     new AppError(code, 'Google sign-in refused', [
         {
             path,
@@ -38,6 +41,7 @@ const refused = (path: string, reason: string, code: 'UNPROCESSABLE' | 'CONFLICT
 export class IdentitiesService {
     constructor(
         @Inject(DB) private readonly db: Db,
+        @Inject(webauthnConfig.KEY) private readonly webauthn: ConfigType<typeof webauthnConfig>,
         private readonly google: GoogleProvider,
         private readonly users: UsersService,
         private readonly roles: RolesService,
@@ -93,8 +97,18 @@ export class IdentitiesService {
         }
     }
 
-    /** Links a Google account to the signed-in user: the session proves who they are. */
-    async link(userId: string, input: GoogleCode) {
+    /**
+     * Links a Google account to the signed-in user. Like adding a passkey, only
+     * an id-web session signed in at most `freshSignInMs` ago may: a stolen
+     * older session cannot attach its own Google account and keep access after
+     * that session is revoked. Otherwise the person signs in again.
+     */
+    async link(caller: AccessClaims, input: GoogleCode) {
+        const session = await this.sessions.active(caller.userId, caller.sessionId)
+        if (!session) throw new AppError('UNAUTHORIZED', 'Session ended, sign in again')
+        const age = Date.now() - session.createdAt.getTime()
+        if (session.clientId !== null || age > this.webauthn.freshSignInMs)
+            throw refused('session', 'reauthentication_required', 'FORBIDDEN')
         const profile = await this.profile(input)
         await this.db.transaction(async tx => {
             const [existing] = await tx
@@ -102,12 +116,13 @@ export class IdentitiesService {
                 .from(identities)
                 .where(and(eq(identities.provider, 'google'), eq(identities.subject, profile.subject)))
             if (existing) {
-                if (existing.userId === userId) return
+                if (existing.userId === caller.userId) return
                 throw refused('identity', 'in_use', 'CONFLICT')
             }
-            if (!(await this.attach(tx, userId, profile))) throw refused('identity', 'already_linked', 'CONFLICT')
+            if (!(await this.attach(tx, caller.userId, profile)))
+                throw refused('identity', 'already_linked', 'CONFLICT')
         })
-        return this.list(userId)
+        return this.list(caller.userId)
     }
 
     async unlink(userId: string) {

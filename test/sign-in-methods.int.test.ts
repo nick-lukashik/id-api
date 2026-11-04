@@ -139,6 +139,54 @@ describe('sign-in with Google', () => {
         expect(listed.body.items).toEqual([])
     })
 
+    it('links only from a fresh sign-in: an older session signs in again, an ended one is out', async () => {
+        const code = t.google.account({
+            subject: 'g-fresh',
+            email: 'fresh@gmail.com',
+            emailVerified: true,
+            name: null,
+        })
+        const old = await emailSignIn('fresh@example.com')
+        await t.db.execute(sql`update sessions set created_at = now() - interval '1 hour' where id = ${old.sessionId}`)
+        const refused = await t
+            .http()
+            .post('/api/v1/me/identities/google')
+            .set('authorization', bearer(old))
+            .send(code)
+            .expect(403)
+        expect(refused.body.details[0]).toEqual({
+            path: 'session',
+            message: 'reauthentication_required',
+        })
+
+        // The access token outlives a signed-out session; the session decides.
+        const ended = await emailSignIn('fresh@example.com')
+        await t
+            .http()
+            .post('/api/v1/sessions/logout')
+            .send({
+                refreshToken: ended.refreshToken,
+            })
+            .expect(204)
+        await t.http().post('/api/v1/me/identities/google').set('authorization', bearer(ended)).send(code).expect(401)
+        const none = await t.http().get('/api/v1/me/identities').set('authorization', bearer(old)).expect(200)
+        expect(none.body.items).toEqual([])
+
+        const fresh = await emailSignIn('fresh@example.com')
+        const linked = await t
+            .http()
+            .post('/api/v1/me/identities/google')
+            .set('authorization', bearer(fresh))
+            .send(code)
+            .expect(200)
+        expect(linked.body.items).toEqual([
+            expect.objectContaining({
+                provider: 'google',
+                email: 'fresh@gmail.com',
+            }),
+        ])
+    })
+
     it('refuses an unverified email, a wrong nonce and a bad code', async () => {
         const unverified = t.google.account({
             subject: 'g-unverified',
@@ -442,6 +490,26 @@ describe('sign-in of the other apps', () => {
             })
             .expect(204)
         await exchange(late.body.code, pair.codeVerifier).expect(422)
+    })
+
+    it('does not let a site session link Google, however fresh', async () => {
+        const session = await emailSignIn('site-link@example.com')
+        const pair = verifierPair()
+        const issued = await authorize(session, pair.codeChallenge).expect(200)
+        const site = await exchange(issued.body.code, pair.codeVerifier).expect(200)
+        const code = t.google.account({
+            subject: 'g-site',
+            email: 'site-link@gmail.com',
+            emailVerified: true,
+            name: null,
+        })
+        const refused = await t
+            .http()
+            .post('/api/v1/me/identities/google')
+            .set('authorization', bearer(site.body))
+            .send(code)
+            .expect(403)
+        expect(refused.body.details[0].message).toBe('reauthentication_required')
     })
 
     it('refuses a wrong verifier or callback, and the code is spent by the failure', async () => {

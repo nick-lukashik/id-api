@@ -68,7 +68,7 @@ export class IdentitiesController {
     @ApiOperation({
         summary: 'Link a Google account to the signed-in user',
     })
-    @ApiErrors(400, 401, 404, 409, 422)
+    @ApiErrors(400, 401, 403, 404, 409, 422)
     link(
         @Caller() caller: AccessClaims,
         @Body({
@@ -76,7 +76,7 @@ export class IdentitiesController {
         })
         body: GoogleCodeInput,
     ) {
-        return this.identities.link(caller.userId, body)
+        return this.identities.link(caller, body)
     }
 
     @Delete('me/identities/google')
