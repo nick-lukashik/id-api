@@ -122,12 +122,14 @@ export class OAuthService {
                 .where(eq(users.id, consumed.userId))
             if (user?.status !== 'active') throw invalidGrant()
             // Signed out at id-web since the code was issued: nothing to sign in from.
+            // Locked until the site's session is in, as a sign-out locks it: one waits for the other.
             const [parent] = await tx
                 .select({
                     id: sessions.id,
                 })
                 .from(sessions)
                 .where(and(eq(sessions.id, consumed.sessionId), isNull(sessions.revokedAt)))
+                .for('update')
             if (!parent) throw invalidGrant()
             return this.sessions.create(tx, consumed.userId, client, 'sso', {
                 clientId: consumed.clientId,

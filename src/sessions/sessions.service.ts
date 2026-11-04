@@ -1,11 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { ConfigType } from '@nestjs/config'
-import { and, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm'
+import { z } from 'zod'
 import { DB } from '../common/database/database.js'
 import { AppError } from '../common/http/app-error.js'
+import { cursorCodec } from '../common/http/cursor.js'
 import { tokenConfig } from '../config/config.js'
 import { sessions } from '../db/schema.js'
-import type { Db, Tx } from '../db/types.js'
+import type { Db, SessionRow, Tx } from '../db/types.js'
 import { SigningKeys } from '../keys/signing-keys.js'
 import type { ClientContext } from '../users/client-context.js'
 import { GrantsService } from '../users/grants.service.js'
@@ -21,6 +23,16 @@ export type SessionTokens = {
     refreshToken: string
     sessionId: string
 }
+
+type RevokedReason = NonNullable<SessionRow['revokedReason']>
+
+const PAGE_SIZE = 50
+const cursor = cursorCodec(
+    z.object({
+        lastActiveAt: z.iso.datetime(),
+        id: z.uuid(),
+    }),
+)
 
 @Injectable()
 export class SessionsService {
@@ -87,11 +99,12 @@ export class SessionsService {
                 },
                 'Refresh token reuse: session revoked',
             )
-            const family = await this.withChildren([
-                rotated.sessionId,
-            ])
-            await this.refresh.revoke(family)
-            await this.markRevoked(family, 'reuse_detected')
+            await this.revoke(
+                [
+                    rotated.sessionId,
+                ],
+                'reuse_detected',
+            )
         }
         if (rotated.result !== 'OK' && rotated.result !== 'RETRY') throw sessionEnded()
 
@@ -104,6 +117,25 @@ export class SessionsService {
                 rotated.sessionId,
             ])
             throw sessionEnded()
+        }
+        // A site's session ends with the id-web session it signed in from, also one a sign-out missed.
+        if (session.parentSessionId) {
+            const [parent] = await this.db
+                .select({
+                    revokedAt: sessions.revokedAt,
+                    revokedReason: sessions.revokedReason,
+                })
+                .from(sessions)
+                .where(eq(sessions.id, session.parentSessionId))
+            if (!parent || parent.revokedAt) {
+                await this.revoke(
+                    [
+                        session.id,
+                    ],
+                    parent?.revokedReason ?? 'logout',
+                )
+                throw sessionEnded()
+            }
         }
         const user = await this.users.get(this.db, session.userId)
         if (user.status !== 'active') {
@@ -124,20 +156,16 @@ export class SessionsService {
         return this.tokens(session.id, session.userId, rotated.token)
     }
 
-    /** Ends a session by its refresh token (sign-out); unknown tokens are fine. */
+    /**
+     * Ends a session by its refresh token (sign-out): only by a token that still
+     * opens it, never by the session id alone. Any other token is fine and changes nothing.
+     */
     async logout(presented: string) {
-        const sessionId = presented.split('.')[0] ?? ''
-        const [session] = await this.db
-            .select({
-                id: sessions.id,
-            })
-            .from(sessions)
-            .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)))
-            .catch(() => [])
-        if (session)
+        const sessionId = await this.refresh.sessionOf(presented)
+        if (sessionId)
             await this.revoke(
                 [
-                    session.id,
+                    sessionId,
                 ],
                 'logout',
             )
@@ -152,8 +180,10 @@ export class SessionsService {
         return session
     }
 
-    list(userId: string) {
-        return this.db
+    /** The live sessions, most recently active first, 50 to a page; `from` is the previous page's `nextCursor`. */
+    async list(userId: string, from?: string) {
+        const after = from ? cursor.decode(from) : undefined
+        const rows = await this.db
             .select({
                 id: sessions.id,
                 createdAt: sessions.createdAt,
@@ -164,9 +194,32 @@ export class SessionsService {
                 clientId: sessions.clientId,
             })
             .from(sessions)
-            .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-            .orderBy(desc(sessions.lastActiveAt))
-            .limit(50)
+            .where(
+                and(
+                    eq(sessions.userId, userId),
+                    this.live(),
+                    after
+                        ? or(
+                              lt(sessions.lastActiveAt, new Date(after.lastActiveAt)),
+                              and(eq(sessions.lastActiveAt, new Date(after.lastActiveAt)), lt(sessions.id, after.id)),
+                          )
+                        : undefined,
+                ),
+            )
+            .orderBy(desc(sessions.lastActiveAt), desc(sessions.id))
+            .limit(PAGE_SIZE + 1)
+        const items = rows.slice(0, PAGE_SIZE)
+        const last = items.at(-1)
+        return {
+            items,
+            nextCursor:
+                rows.length > PAGE_SIZE && last
+                    ? cursor.encode({
+                          lastActiveAt: last.lastActiveAt.toISOString(),
+                          id: last.id,
+                      })
+                    : null,
+        }
     }
 
     /** Revokes one of the caller's own sessions; someone else's is 404. */
@@ -198,7 +251,7 @@ export class SessionsService {
                     eq(sessions.userId, userId),
                     ne(sessions.id, currentSessionId),
                     or(isNull(sessions.parentSessionId), ne(sessions.parentSessionId, currentSessionId)),
-                    isNull(sessions.revokedAt),
+                    this.live(),
                 ),
             )
         await this.revoke(
@@ -208,17 +261,44 @@ export class SessionsService {
         return others.length
     }
 
-    /** Ends sessions and the other sites' sessions signed in from them. */
-    private async revoke(ids: string[], reason: 'logout' | 'user' | 'admin') {
+    /**
+     * Not ended and refreshed within the refresh lifetime: past it the Redis
+     * family has expired, though nobody marked the row.
+     */
+    private live() {
+        return and(
+            isNull(sessions.revokedAt),
+            gt(sessions.lastActiveAt, new Date(Date.now() - this.config.refreshTtlSec * 1_000)),
+        )
+    }
+
+    /**
+     * Ends sessions and the other sites' sessions signed in from them. The rows
+     * stay locked from before the children are read until they are marked, and
+     * a code exchange locks its parent the same way: it either commits its site
+     * session first (and that one is among the children) or finds the parent ended.
+     */
+    private async revoke(ids: string[], reason: RevokedReason) {
         if (ids.length === 0) return
-        const family = await this.withChildren(ids)
-        await this.refresh.revoke(family)
-        await this.markRevoked(family, reason)
+        await this.db.transaction(async tx => {
+            // In id order, so two revocations over the same sessions cannot deadlock.
+            await tx
+                .select({
+                    id: sessions.id,
+                })
+                .from(sessions)
+                .where(inArray(sessions.id, ids))
+                .orderBy(sessions.id)
+                .for('update')
+            const family = await this.withChildren(tx, ids)
+            await this.refresh.revoke(family)
+            await this.markRevoked(tx, family, reason)
+        })
     }
 
     /** The sessions and their live children (one level: a site's session never has its own). */
-    private async withChildren(ids: string[]) {
-        const children = await this.db
+    private async withChildren(tx: Tx, ids: string[]) {
+        const children = await tx
             .select({
                 id: sessions.id,
             })
@@ -232,8 +312,8 @@ export class SessionsService {
         ]
     }
 
-    private async markRevoked(ids: string[], reason: 'logout' | 'user' | 'admin' | 'reuse_detected') {
-        await this.db
+    private async markRevoked(tx: Tx, ids: string[], reason: RevokedReason) {
+        await tx
             .update(sessions)
             .set({
                 revokedAt: new Date(),
