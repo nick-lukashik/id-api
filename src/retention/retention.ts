@@ -42,9 +42,9 @@ type DeleteBatch = (tx: Tx) => PromiseLike<{
  * Deletes sign-in data past its retention: hourly on every replica. Every batch
  * commits by itself under an advisory lock, so a backlog holds no locks for long
  * and a failure keeps what was deleted before it. A replica that finds the lock
- * taken leaves the rest to the other one. `sessions.parent_session_id` has no
- * foreign key: a site's session outlives an idle id-web session it signed in
- * from and goes by its own dates.
+ * taken stops: the rest goes in the other replica's pass or the next hourly one.
+ * `sessions.parent_session_id` has no foreign key: a site's session outlives an
+ * idle id-web session it signed in from and goes by its own dates.
  */
 @Injectable()
 export class Retention implements OnApplicationBootstrap, BeforeApplicationShutdown {
