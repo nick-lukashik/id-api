@@ -126,6 +126,11 @@ export const sessions = pgTable(
         }).notNull(),
         /** The app this session belongs to (`landing-web`); null for id-web's own sessions. */
         clientId: text('client_id'),
+        /**
+         * For a session of another site: the id-web session it signed in from.
+         * Ending that one ends this one too (sign-out anywhere is sign-out everywhere in this browser).
+         */
+        parentSessionId: uuid('parent_session_id'),
         userAgent: text('user_agent'),
         ip: text('ip'),
         createdAt: at('created_at').notNull().defaultNow(),
@@ -142,15 +147,11 @@ export const sessions = pgTable(
     },
     t => [
         index('sessions_user_idx').on(t.userId, t.createdAt.desc()),
+        index('sessions_parent_idx').on(t.parentSessionId).where(sql`${t.parentSessionId} is not null`),
     ],
 )
 
-/**
- * Roles of a user. Staff roles (owner, support) are granted by hand
- * (`source = manual`) and never expire. A paid role (subscriber) has one row
- * per subscription (`source = subscription`, `source_ref` = its id), kept in
- * step with `pay.subscription.changed.v1` and valid until `expires_at`.
- */
+/** Staff roles (owner, support), granted by hand. Money never buys a role: that is a grant. */
 export const roleBindings = pgTable(
     'role_bindings',
     {
@@ -163,30 +164,49 @@ export const roleBindings = pgTable(
         role: text('role').notNull(),
         reason: text('reason').notNull(),
         grantedBy: text('granted_by').notNull(),
-        source: text('source', {
-            enum: [
-                'manual',
-                'subscription',
-            ],
-        })
-            .notNull()
-            .default('manual'),
-        sourceRef: text('source_ref'),
-        /** The `version` of the last subscription event applied: an older one changes nothing. */
-        sourceVersion: integer('source_version'),
-        expiresAt: at('expires_at'),
         createdAt: at('created_at').notNull().defaultNow(),
         revokedAt: at('revoked_at'),
     },
     t => [
-        uniqueIndex('role_bindings_active_uq')
-            .on(t.userId, t.role)
-            .where(sql`${t.revokedAt} is null and ${t.source} = 'manual'`),
-        uniqueIndex('role_bindings_source_uq').on(t.source, t.sourceRef).where(sql`${t.sourceRef} is not null`),
-        check(
-            'role_bindings_source_ref',
-            sql`(${t.source} = 'manual') = (${t.sourceRef} is null and ${t.expiresAt} is null)`,
-        ),
+        uniqueIndex('role_bindings_active_uq').on(t.userId, t.role).where(sql`${t.revokedAt} is null`),
+    ],
+)
+
+/**
+ * What a person has paid for: a plan of a service, one row per subscription
+ * (`source_ref`), kept in step with `pay.subscription.changed.v1`. In force
+ * while not revoked and before `valid_until`; the access token carries the
+ * ones in force as `service:plan`, so nothing has to run when a period ends.
+ */
+export const grants = pgTable(
+    'grants',
+    {
+        id: uuid('id').primaryKey().default(sql`uuidv7()`),
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, {
+                onDelete: 'cascade',
+            }),
+        service: text('service').notNull(),
+        plan: text('plan').notNull(),
+        source: text('source', {
+            enum: [
+                'subscription',
+            ],
+        }).notNull(),
+        sourceRef: text('source_ref').notNull(),
+        /** The `version` of the last event applied: an older one changes nothing. */
+        sourceVersion: integer('source_version').notNull(),
+        validUntil: at('valid_until'),
+        revokedAt: at('revoked_at'),
+        createdAt: at('created_at').notNull().defaultNow(),
+        updatedAt: at('updated_at').notNull().defaultNow(),
+    },
+    t => [
+        uniqueIndex('grants_source_uq').on(t.source, t.sourceRef),
+        index('grants_user_idx').on(t.userId),
+        check('grants_service_format', sql`${t.service} ~ '^[a-z][a-z0-9-]{1,30}$'`),
+        check('grants_plan_format', sql`${t.plan} ~ '^[a-z][a-z0-9-]{1,30}$'`),
     ],
 )
 
@@ -268,6 +288,8 @@ export const authorizationCodes = pgTable(
         clientId: text('client_id').notNull(),
         redirectUri: text('redirect_uri').notNull(),
         codeChallenge: text('code_challenge').notNull(),
+        /** The id-web session that asked: the site's session becomes its child. */
+        sessionId: uuid('session_id').notNull(),
         userId: uuid('user_id')
             .notNull()
             .references(() => users.id, {

@@ -16,6 +16,8 @@ export type AccessTokenInput = {
     userId: string
     sessionId: string
     roles: string[]
+    /** Paid plans in force, `service:plan`. */
+    grants: string[]
     accessVersion: number
 }
 
@@ -74,6 +76,7 @@ export class SigningKeys implements OnModuleInit {
         const token = await new SignJWT({
             sid: input.sessionId,
             roles: input.roles,
+            grants: input.grants,
             av: input.accessVersion,
         })
             .setProtectedHeader({

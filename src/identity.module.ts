@@ -14,6 +14,7 @@ import { PasskeysController } from './passkeys/passkeys.controller.js'
 import { PasskeysService } from './passkeys/passkeys.service.js'
 import { RefreshStore } from './sessions/refresh-store.js'
 import { SessionsService } from './sessions/sessions.service.js'
+import { GrantsService } from './users/grants.service.js'
 import { InternalUsersController } from './users/internal-users.controller.js'
 import { MeController } from './users/me.controller.js'
 import { RolesService } from './users/roles.service.js'
@@ -48,6 +49,7 @@ import { UsersService } from './users/users.service.js'
         RefreshStore,
         SessionsService,
         RolesService,
+        GrantsService,
         UsersService,
         SubscriptionsConsumer,
     ],

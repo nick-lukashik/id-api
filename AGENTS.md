@@ -12,7 +12,7 @@ id-api: users, sign-in (email code, Google, passkeys), sessions (refresh tokens 
 
 - Never log, store or publish a sign-in code, a refresh token or a key. Only `challengeId` and `sessionId` appear in logs.
 - A code is compared in constant time and consumed atomically. Session revocation always deletes the Redis family first, then marks the row.
-- Every role change bumps `users.access_version` in the same transaction. Staff roles are granted by hand only; a paid role only from `pay.subscription.changed.v1`, never from a coin pack.
+- Every role change bumps `users.access_version` in the same transaction. Staff roles are granted by hand only. Paid access is a grant (`service:plan`) from `pay.subscription.changed.v1`, never a role and never from a coin pack.
 - A WebAuthn challenge, an authorization code and a sign-in code are each taken once, before anything is checked, so a failed try spends them. Why a passkey was refused goes to the log only (without the challenge), never to the client.
 - A Google account is never linked to an existing email by itself: `link_required`, and the owner links it signed in.
 - `test/authenticator.ts` is a software passkey for the integration tests; `FakeGoogle` in `test/harness.ts` stands in for Google.

@@ -1,5 +1,5 @@
 {
-  "id": "7e25b5e2-925b-482c-9f64-8ccd248ef4e0",
+  "id": "cfcba42b-5782-4bf6-b009-2f76af614c40",
   "prevId": "b966d58b-53ab-459b-89b8-368c6194ac87",
   "version": "7",
   "dialect": "postgresql",
@@ -29,6 +29,12 @@
         "code_challenge": {
           "name": "code_challenge",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
@@ -94,6 +100,148 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.grants": {
+      "name": "grants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service": {
+          "name": "service",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "plan": {
+          "name": "plan",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_ref": {
+          "name": "source_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_version": {
+          "name": "source_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_until": {
+          "name": "valid_until",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "grants_source_uq": {
+          "name": "grants_source_uq",
+          "columns": [
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_ref",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "grants_user_idx": {
+          "name": "grants_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "grants_user_id_users_id_fk": {
+          "name": "grants_user_id_users_id_fk",
+          "tableFrom": "grants",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "grants_service_format": {
+          "name": "grants_service_format",
+          "value": "\"grants\".\"service\" ~ '^[a-z][a-z0-9-]{1,30}$'"
+        },
+        "grants_plan_format": {
+          "name": "grants_plan_format",
+          "value": "\"grants\".\"plan\" ~ '^[a-z][a-z0-9-]{1,30}$'"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.identities": {
@@ -671,31 +819,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'manual'"
-        },
-        "source_ref": {
-          "name": "source_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source_version": {
-          "name": "source_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp (3) with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp (3) with time zone",
@@ -728,29 +851,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"role_bindings\".\"revoked_at\" is null and \"role_bindings\".\"source\" = 'manual'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "role_bindings_source_uq": {
-          "name": "role_bindings_source_uq",
-          "columns": [
-            {
-              "expression": "source",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "source_ref",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"role_bindings\".\"source_ref\" is not null",
+          "where": "\"role_bindings\".\"revoked_at\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -774,12 +875,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "role_bindings_source_ref": {
-          "name": "role_bindings_source_ref",
-          "value": "(\"role_bindings\".\"source\" = 'manual') = (\"role_bindings\".\"source_ref\" is null and \"role_bindings\".\"expires_at\" is null)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.sessions": {
@@ -808,6 +904,12 @@
         "client_id": {
           "name": "client_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_session_id": {
+          "name": "parent_session_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -868,6 +970,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sessions_parent_idx": {
+          "name": "sessions_parent_idx",
+          "columns": [
+            {
+              "expression": "parent_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"sessions\".\"parent_session_id\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}

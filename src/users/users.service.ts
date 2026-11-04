@@ -7,6 +7,7 @@ import { defineEvent } from '../common/messaging/event.js'
 import { enqueueEvent } from '../common/messaging/outbox.js'
 import { users } from '../db/schema.js'
 import type { Db, Tx, UserRow } from '../db/types.js'
+import { GrantsService } from './grants.service.js'
 import { RolesService } from './roles.service.js'
 
 export const userRegistered = defineEvent(userRegisteredV1.type, userRegisteredV1.producer, userRegisteredV1.payload)
@@ -17,6 +18,8 @@ export type Profile = {
     displayName: string | null
     locale: Locale
     roles: string[]
+    /** Paid plans in force, `service:plan`. */
+    grants: string[]
     createdAt: string
 }
 
@@ -25,6 +28,7 @@ export class UsersService {
     constructor(
         @Inject(DB) private readonly db: Db,
         private readonly roles: RolesService,
+        private readonly grants: GrantsService,
     ) {}
 
     /**
@@ -80,7 +84,11 @@ export class UsersService {
 
     async profile(userId: string): Promise<Profile> {
         const user = await this.get(this.db, userId)
-        return this.toProfile(user, await this.roles.rolesOf(this.db, userId))
+        return this.toProfile(
+            user,
+            await this.roles.rolesOf(this.db, userId),
+            await this.grants.activeOf(this.db, userId),
+        )
     }
 
     async update(
@@ -100,13 +108,14 @@ export class UsersService {
         return this.profile(userId)
     }
 
-    toProfile(user: UserRow, roles: string[]): Profile {
+    toProfile(user: UserRow, roles: string[], grants: string[] = []): Profile {
         return {
             id: user.id,
             email: user.email,
             displayName: user.displayName,
             locale: user.locale,
             roles,
+            grants,
             createdAt: user.createdAt.toISOString(),
         }
     }

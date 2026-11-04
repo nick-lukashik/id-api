@@ -67,7 +67,7 @@ export class OAuthController {
         })
         body: z.infer<typeof authorizeSchema>,
     ) {
-        return this.oauth.authorize(caller.userId, body)
+        return this.oauth.authorize(caller, body)
     }
 
     @Post('token')

@@ -388,8 +388,9 @@ describe('sign-in of the other apps', () => {
             }),
         )
 
-        // "Sign out everywhere else" reaches the app's session too.
-        await t.http().post('/api/v1/me/sessions/revoke-others').set('authorization', bearer(session)).expect(200)
+        // Another device's sign-out everywhere else reaches it.
+        const elsewhere = await emailSignIn('sso@example.com')
+        await t.http().post('/api/v1/me/sessions/revoke-others').set('authorization', bearer(elsewhere)).expect(200)
         await t
             .http()
             .post('/api/v1/sessions/refresh')
@@ -397,6 +398,50 @@ describe('sign-in of the other apps', () => {
                 refreshToken: app.body.refreshToken,
             })
             .expect(401)
+    })
+
+    it('ends the site sessions signed in from an id-web session when that one signs out', async () => {
+        const session = await emailSignIn('global-out@example.com')
+        const pair = verifierPair()
+        const issued = await authorize(session, pair.codeChallenge).expect(200)
+        const site = await exchange(issued.body.code, pair.codeVerifier).expect(200)
+
+        // "Sign out everywhere else" keeps the sites of this browser.
+        await t.http().post('/api/v1/me/sessions/revoke-others').set('authorization', bearer(session)).expect(200)
+        const refreshed = await t
+            .http()
+            .post('/api/v1/sessions/refresh')
+            .send({
+                refreshToken: site.body.refreshToken,
+            })
+            .expect(200)
+
+        await t
+            .http()
+            .post('/api/v1/sessions/logout')
+            .send({
+                refreshToken: session.refreshToken,
+            })
+            .expect(204)
+        await t
+            .http()
+            .post('/api/v1/sessions/refresh')
+            .send({
+                refreshToken: refreshed.body.refreshToken,
+            })
+            .expect(401)
+
+        // A code issued before the sign-out signs nobody in after it.
+        const again = await emailSignIn('global-out@example.com')
+        const late = await authorize(again, pair.codeChallenge).expect(200)
+        await t
+            .http()
+            .post('/api/v1/sessions/logout')
+            .send({
+                refreshToken: again.refreshToken,
+            })
+            .expect(204)
+        await exchange(late.body.code, pair.codeVerifier).expect(422)
     })
 
     it('refuses a wrong verifier or callback, and the code is spent by the failure', async () => {
@@ -414,7 +459,7 @@ describe('sign-in of the other apps', () => {
     })
 })
 
-describe('roles from a subscription', () => {
+describe('paid plans from subscriptions', () => {
     const event = (payload: Record<string, unknown>) => ({
         eventId: randomUUID(),
         type: 'pay.subscription.changed.v1',
@@ -422,13 +467,11 @@ describe('roles from a subscription', () => {
         occurredAt: new Date().toISOString(),
         aggregateId: String(payload.subscriptionId),
         payload: {
-            plan: 'monthly',
-            role: 'subscriber',
             changedAt: new Date().toISOString(),
             ...payload,
         },
     })
-    const rolesOf = async (session: Tokens) => {
+    const grantsOf = async (session: Tokens) => {
         const refreshed = await t
             .http()
             .post('/api/v1/sessions/refresh')
@@ -437,63 +480,86 @@ describe('roles from a subscription', () => {
             })
             .expect(200)
         session.refreshToken = refreshed.body.refreshToken
-        return (await verifier()(refreshed.body.accessToken)).roles
+        return (await verifier()(refreshed.body.accessToken)).grants
     }
+    const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString()
 
-    it('gives the role for the paid period and takes it away', async () => {
+    it('holds any number of plans of different services, each for its own period', async () => {
         const session = await emailSignIn('subscriber@example.com')
         const consumer = t.app.get(SubscriptionsConsumer)
-        const subscriptionId = randomUUID()
-        const inAMonth = new Date(Date.now() + 30 * 86_400_000).toISOString()
-
+        const roulette = randomUUID()
+        const edu = randomUUID()
         await consumer.handle(
             event({
-                subscriptionId,
+                subscriptionId: roulette,
                 userId: session.user.id,
-                accessUntil: inAMonth,
+                service: 'roulette',
+                plan: 'vip',
+                accessUntil: inDays(30),
                 version: 1,
             }),
         )
-        expect(await rolesOf(session)).toEqual([
-            'subscriber',
-        ])
-
-        // A late older event changes nothing; the refund (newer) ends it now.
         await consumer.handle(
             event({
-                subscriptionId,
+                subscriptionId: edu,
                 userId: session.user.id,
+                service: 'edu',
+                plan: 'pro',
+                accessUntil: inDays(365),
+                version: 1,
+            }),
+        )
+        expect(await grantsOf(session)).toEqual([
+            'edu:pro',
+            'roulette:vip',
+        ])
+        const me = await t.http().get('/api/v1/me').set('authorization', bearer(session)).expect(200)
+        expect(me.body.roles).toEqual([])
+
+        // A refund of one (newer version) ends it now; a late older event changes nothing.
+        await consumer.handle(
+            event({
+                subscriptionId: roulette,
+                userId: session.user.id,
+                service: 'roulette',
+                plan: 'vip',
                 accessUntil: null,
                 version: 3,
             }),
         )
         await consumer.handle(
             event({
-                subscriptionId,
+                subscriptionId: roulette,
                 userId: session.user.id,
-                accessUntil: inAMonth,
+                service: 'roulette',
+                plan: 'vip',
+                accessUntil: inDays(30),
                 version: 2,
             }),
         )
-        expect(await rolesOf(session)).toEqual([])
+        expect(await grantsOf(session)).toEqual([
+            'edu:pro',
+        ])
     })
 
-    it('lets a paid period run out by itself', async () => {
+    it('lets a paid period run out with no job: the next token simply has no grant', async () => {
         const session = await emailSignIn('lapsed@example.com')
         await t.app.get(SubscriptionsConsumer).handle(
             event({
                 subscriptionId: randomUUID(),
                 userId: session.user.id,
+                service: 'roulette',
+                plan: 'vip',
                 accessUntil: new Date(Date.now() + 60_000).toISOString(),
                 version: 1,
             }),
         )
-        expect(await rolesOf(session)).toEqual([
-            'subscriber',
+        expect(await grantsOf(session)).toEqual([
+            'roulette:vip',
         ])
         await t.db.execute(
-            sql`update role_bindings set expires_at = now() - interval '1 second' where user_id = ${session.user.id}`,
+            sql`update grants set valid_until = now() - interval '1 second' where user_id = ${session.user.id}`,
         )
-        expect(await rolesOf(session)).toEqual([])
+        expect(await grantsOf(session)).toEqual([])
     })
 })

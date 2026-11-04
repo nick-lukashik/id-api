@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { ConfigType } from '@nestjs/config'
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { DB } from '../common/database/database.js'
 import { AppError } from '../common/http/app-error.js'
 import { tokenConfig } from '../config/config.js'
@@ -8,6 +8,7 @@ import { sessions } from '../db/schema.js'
 import type { Db, Tx } from '../db/types.js'
 import { SigningKeys } from '../keys/signing-keys.js'
 import type { ClientContext } from '../users/client-context.js'
+import { GrantsService } from '../users/grants.service.js'
 import { RolesService } from '../users/roles.service.js'
 import { UsersService } from '../users/users.service.js'
 import { RefreshStore } from './refresh-store.js'
@@ -32,19 +33,31 @@ export class SessionsService {
         private readonly keys: SigningKeys,
         private readonly users: UsersService,
         private readonly roles: RolesService,
+        private readonly grants: GrantsService,
     ) {}
 
     /**
-     * The session row, inside the sign-in transaction. `clientId` names the app
-     * a session belongs to (sign-in through id-web from another site).
+     * The session row, inside the sign-in transaction. `site` names the app a
+     * session belongs to and the id-web session it signed in from (sign-in
+     * through id-web from another site).
      */
-    async create(tx: Tx, userId: string, client: ClientContext, method: AuthMethod, clientId: string | null = null) {
+    async create(
+        tx: Tx,
+        userId: string,
+        client: ClientContext,
+        method: AuthMethod,
+        site: {
+            clientId: string
+            parentSessionId: string
+        } | null = null,
+    ) {
         const [row] = await tx
             .insert(sessions)
             .values({
                 userId,
                 authMethod: method,
-                clientId,
+                clientId: site?.clientId ?? null,
+                parentSessionId: site?.parentSessionId ?? null,
                 ip: client.ip,
                 userAgent: client.userAgent,
             })
@@ -74,12 +87,11 @@ export class SessionsService {
                 },
                 'Refresh token reuse: session revoked',
             )
-            await this.markRevoked(
-                [
-                    rotated.sessionId,
-                ],
-                'reuse_detected',
-            )
+            const family = await this.withChildren([
+                rotated.sessionId,
+            ])
+            await this.refresh.revoke(family)
+            await this.markRevoked(family, 'reuse_detected')
         }
         if (rotated.result !== 'OK' && rotated.result !== 'RETRY') throw sessionEnded()
 
@@ -174,13 +186,21 @@ export class SessionsService {
         )
     }
 
+    /** Every other session of the user, except the other sites' sessions of this browser (children of this one). */
     async revokeOthers(userId: string, currentSessionId: string) {
         const others = await this.db
             .select({
                 id: sessions.id,
             })
             .from(sessions)
-            .where(and(eq(sessions.userId, userId), ne(sessions.id, currentSessionId), isNull(sessions.revokedAt)))
+            .where(
+                and(
+                    eq(sessions.userId, userId),
+                    ne(sessions.id, currentSessionId),
+                    or(isNull(sessions.parentSessionId), ne(sessions.parentSessionId, currentSessionId)),
+                    isNull(sessions.revokedAt),
+                ),
+            )
         await this.revoke(
             others.map(row => row.id),
             'user',
@@ -188,10 +208,28 @@ export class SessionsService {
         return others.length
     }
 
+    /** Ends sessions and the other sites' sessions signed in from them. */
     private async revoke(ids: string[], reason: 'logout' | 'user' | 'admin') {
         if (ids.length === 0) return
-        await this.refresh.revoke(ids)
-        await this.markRevoked(ids, reason)
+        const family = await this.withChildren(ids)
+        await this.refresh.revoke(family)
+        await this.markRevoked(family, reason)
+    }
+
+    /** The sessions and their live children (one level: a site's session never has its own). */
+    private async withChildren(ids: string[]) {
+        const children = await this.db
+            .select({
+                id: sessions.id,
+            })
+            .from(sessions)
+            .where(and(inArray(sessions.parentSessionId, ids), isNull(sessions.revokedAt)))
+        return [
+            ...new Set([
+                ...ids,
+                ...children.map(row => row.id),
+            ]),
+        ]
     }
 
     private async markRevoked(ids: string[], reason: 'logout' | 'user' | 'admin' | 'reuse_detected') {
@@ -211,6 +249,7 @@ export class SessionsService {
                 userId,
                 sessionId,
                 roles: await this.roles.rolesOf(this.db, userId),
+                grants: await this.grants.activeOf(this.db, userId),
                 accessVersion: user.accessVersion,
             },
             new Date(),

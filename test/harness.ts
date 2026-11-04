@@ -142,7 +142,7 @@ export async function startApp(overrides: Record<string, string> = {}) {
     const db = app.get<Db>(DB)
     const redis = app.get<RedisClient>(REDIS)
     await db.execute(
-        sql`truncate users, login_challenges, sessions, role_bindings, identities, passkeys, authorization_codes, outbox, inbox cascade`,
+        sql`truncate users, login_challenges, sessions, role_bindings, grants, identities, passkeys, authorization_codes, outbox, inbox cascade`,
     )
     await redis.flushDb()
     await app.listen(0, '127.0.0.1')

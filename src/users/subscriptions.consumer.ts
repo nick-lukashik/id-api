@@ -6,7 +6,7 @@ import { processOnce } from '../common/messaging/inbox.js'
 import { PermanentError, RabbitMq } from '../common/messaging/rabbitmq.js'
 import { defineQueue } from '../common/messaging/topology.js'
 import type { Db } from '../db/types.js'
-import { RolesService } from './roles.service.js'
+import { GrantsService } from './grants.service.js'
 
 const subscriptionChanged = defineEvent(
     subscriptionChangedV1.type,
@@ -24,7 +24,7 @@ export const subscriptionsQueue = defineQueue('id-api.subscriptions', [
 ])
 
 /**
- * Paid roles from subscriptions (pay-api sells none yet: the queue waits).
+ * Paid plans from subscriptions (pay-api sells none yet: the queue waits).
  * The inbox makes a redelivery a no-op; the subscription version makes an
  * event that arrives late a no-op.
  */
@@ -33,7 +33,7 @@ export class SubscriptionsConsumer implements OnApplicationBootstrap {
     constructor(
         @Inject(DB) private readonly db: Db,
         private readonly rabbit: RabbitMq,
-        private readonly roles: RolesService,
+        private readonly grants: GrantsService,
     ) {}
 
     async onApplicationBootstrap() {
@@ -54,11 +54,11 @@ export class SubscriptionsConsumer implements OnApplicationBootstrap {
                 type: event.type,
             },
             async tx => {
-                await this.roles.applySubscription(tx, {
+                await this.grants.applySubscription(tx, {
                     subscriptionId: event.payload.subscriptionId,
                     userId: event.payload.userId,
+                    service: event.payload.service,
                     plan: event.payload.plan,
-                    role: event.payload.role,
                     accessUntil: event.payload.accessUntil ? new Date(event.payload.accessUntil) : null,
                     version: event.payload.version,
                 })

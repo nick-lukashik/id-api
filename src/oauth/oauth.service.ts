@@ -5,7 +5,7 @@ import { and, eq, gt, isNull, lt } from 'drizzle-orm'
 import { DB } from '../common/database/database.js'
 import { AppError } from '../common/http/app-error.js'
 import { oauthConfig } from '../config/config.js'
-import { authorizationCodes, users } from '../db/schema.js'
+import { authorizationCodes, sessions, users } from '../db/schema.js'
 import type { Db } from '../db/types.js'
 import { SessionsService } from '../sessions/sessions.service.js'
 import type { ClientContext } from '../users/client-context.js'
@@ -47,7 +47,10 @@ export class OAuthService {
 
     /** A one-time code for the signed-in user, valid for 60 seconds. */
     async authorize(
-        userId: string,
+        caller: {
+            userId: string
+            sessionId: string
+        },
         input: {
             clientId: string
             redirectUri: string
@@ -64,7 +67,8 @@ export class OAuthService {
             clientId: input.clientId,
             redirectUri: input.redirectUri,
             codeChallenge: input.codeChallenge,
-            userId,
+            sessionId: caller.sessionId,
+            userId: caller.userId,
             expiresAt,
         })
         return {
@@ -117,7 +121,18 @@ export class OAuthService {
                 .from(users)
                 .where(eq(users.id, consumed.userId))
             if (user?.status !== 'active') throw invalidGrant()
-            return this.sessions.create(tx, consumed.userId, client, 'sso', consumed.clientId)
+            // Signed out at id-web since the code was issued: nothing to sign in from.
+            const [parent] = await tx
+                .select({
+                    id: sessions.id,
+                })
+                .from(sessions)
+                .where(and(eq(sessions.id, consumed.sessionId), isNull(sessions.revokedAt)))
+            if (!parent) throw invalidGrant()
+            return this.sessions.create(tx, consumed.userId, client, 'sso', {
+                clientId: consumed.clientId,
+                parentSessionId: parent.id,
+            })
         })
         return this.sessions.issue(sessionId, consumed.userId)
     }
