@@ -36,7 +36,7 @@ Only `id-web` (server side) and other services inside the cluster call it. It ha
 
 Limits:
 - one code per email per `LOGIN_RESEND_COOLDOWN_MS` (60 s) and 10 codes per email per day;
-- 20 codes and 30 verifications per IP per hour;
+- 20 codes per IP per hour and 30 verifications per IP per 10 minutes;
 - 5 attempts per code;
 - a code lives 10 minutes.
 
@@ -74,7 +74,7 @@ The privacy policy quotes these periods: change them together.
 ## Passkeys and Google
 
 - **Passkeys.** SimpleWebAuthn (`src/passkeys/`). RP `WEBAUTHN_RP_ID` (`nick-lukashik.com`), origin `WEBAUTHN_ORIGIN` (id-web) only, user verification required, discoverable credentials, ES256 / EdDSA / RS256. A challenge lives 5 minutes in Redis and is taken once (`GETDEL`). The user handle is the 16 bytes of the user id; a sign-in whose handle names another account is refused. The signature counter has to grow unless the device does not count (synced passkeys say 0).
-- **Google.** `src/identities/`. The code is exchanged with the client secret and PKCE verifier; the ID token is checked against Google's JWKS (`iss`, `aud`, RS256, `nonce`), and only a verified email signs up. Off while `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` or `GOOGLE_REDIRECT_URI` is empty.
+- **Google.** `src/identities/`. The code is exchanged with the client secret and PKCE verifier; the ID token is checked against Google's JWKS (`iss`, `aud`, RS256, `nonce`), and only a verified email signs up. Off while `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is empty. An empty `GOOGLE_REDIRECT_URI` falls back to the production callback.
 - The email code always stays, so a passkey can be removed and Google unlinked at any time.
 
 ## Commands
@@ -88,11 +88,11 @@ pnpm dev           # http://localhost:4100
 pnpm verify        # biome, typecheck, build, tests (Testcontainers)
 ```
 
-`@nick-lukashik/auth` and `@nick-lukashik/contracts` come from the neighbouring `packages` folder (`file:`) until their first publish. The Docker build needs the published versions (`packages/README.md`).
+`@nick-lukashik/auth` and `@nick-lukashik/contracts` are published versions from GitHub Packages (`.npmrc`). `pnpm install` and the Docker build need a token for them: "Installing" in `packages/README.md`.
 
 ## Events
 
 | Event                                   | When                                                       |
 | --------------------------------------- | ---------------------------------------------------------- |
 | `id.user.registered.v1`                 | The first sign-in of an email, in its transaction (outbox) |
-| consumed: `pay.subscription.changed.v1` | The paid role of a subscription (inbox)                    |
+| consumed: `pay.subscription.changed.v1` | The paid plan (grant) of a subscription (inbox)            |
