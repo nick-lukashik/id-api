@@ -88,6 +88,18 @@ export class MeController {
         }
     }
 
+    @Get('session')
+    @ApiOperation({
+        summary:
+            'Whether the session of this access token is still alive; the token alone stays valid until it expires',
+    })
+    @ApiErrors(401)
+    async session(@Caller() caller: AccessClaims) {
+        return {
+            active: await this.sessions.isLive(caller.sessionId),
+        }
+    }
+
     @Delete('sessions/:id')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
