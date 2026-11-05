@@ -164,12 +164,19 @@ export class SessionsService {
                 .select({
                     revokedAt: sessions.revokedAt,
                     revokedReason: sessions.revokedReason,
+                    clientId: sessions.clientId,
                 })
                 .from(sessions)
                 .where(eq(sessions.id, session.parentSessionId))
             if (!parent || parent.revokedAt)
                 return {
                     ended: parent?.revokedReason ?? 'logout',
+                }
+            // A session under a site's session, from before sign-in to a site needed an id-web
+            // session: a sign-out reaches one level only, so it ends here.
+            if (parent.clientId !== null)
+                return {
+                    ended: 'logout',
                 }
         }
         const user = await this.users.get(this.db, session.userId)
@@ -203,8 +210,9 @@ export class SessionsService {
     }
 
     /**
-     * Ends a session by its refresh token (sign-out): only by a token that still
-     * opens it, never by the session id alone. Any other token is fine and changes nothing.
+     * Ends a session by its refresh token (sign-out): by any token it was really given,
+     * so whoever turned a stolen token on is out too; never by the session id alone. Any
+     * other token is fine and changes nothing.
      */
     async logout(presented: string) {
         const sessionId = await this.refresh.sessionOf(presented)
@@ -228,6 +236,16 @@ export class SessionsService {
             .select()
             .from(sessions)
             .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+        return session
+    }
+
+    /** The same in a transaction, the row locked until it ends: a sign-out of this session waits, or came first. */
+    async activeLocked(tx: Tx, userId: string, sessionId: string) {
+        const [session] = await tx
+            .select()
+            .from(sessions)
+            .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+            .for('update')
         return session
     }
 

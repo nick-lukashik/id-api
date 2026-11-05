@@ -27,10 +27,15 @@ type Tokens = {
     }
 }
 
+let signIns = 0
+
+/** Signs in by email code, each time from another address (the per-IP limits stay out of the way). */
 async function emailSignIn(email: string): Promise<Tokens> {
+    const ip = `203.0.113.${100 + signIns++}`
     await t
         .http()
         .post('/api/v1/login/email')
+        .set('x-forwarded-for', ip)
         .send({
             email,
         })
@@ -39,6 +44,7 @@ async function emailSignIn(email: string): Promise<Tokens> {
     const verified = await t
         .http()
         .post('/api/v1/login/email/verify')
+        .set('x-forwarded-for', ip)
         .send({
             challengeId,
             code,
@@ -327,6 +333,68 @@ describe('passkeys', () => {
                 rpId: 'localhost',
             }).id,
         )
+    })
+
+    it('refuses to finish adding a passkey after the session signed out', async () => {
+        const session = await emailSignIn('ended-ceremony@example.com')
+        const device = new SoftwareAuthenticator()
+        const begun = await t
+            .http()
+            .post('/api/v1/me/passkeys/options')
+            .set('authorization', bearer(session))
+            .expect(200)
+        await t
+            .http()
+            .post('/api/v1/sessions/logout')
+            .send({
+                refreshToken: session.refreshToken,
+            })
+            .expect(204)
+
+        await t
+            .http()
+            .post('/api/v1/me/passkeys')
+            .set('authorization', bearer(session))
+            .send({
+                challengeId: begun.body.challengeId,
+                name: 'Late',
+                response: device.register(begun.body.options),
+            })
+            .expect(401)
+        const signIn = await t.http().post('/api/v1/login/passkey/options').expect(200)
+        await t
+            .http()
+            .post('/api/v1/login/passkey/verify')
+            .send({
+                challengeId: signIn.body.challengeId,
+                response: device.assert(signIn.body.options),
+            })
+            .expect(422)
+    })
+
+    it('refuses to finish adding a passkey once the sign-in is no longer fresh', async () => {
+        const session = await emailSignIn('slow-ceremony@example.com')
+        const device = new SoftwareAuthenticator()
+        const begun = await t
+            .http()
+            .post('/api/v1/me/passkeys/options')
+            .set('authorization', bearer(session))
+            .expect(200)
+        await t.db.execute(
+            sql`update sessions set created_at = now() - interval '1 hour' where id = ${session.sessionId}`,
+        )
+
+        const refused = await t
+            .http()
+            .post('/api/v1/me/passkeys')
+            .set('authorization', bearer(session))
+            .send({
+                challengeId: begun.body.challengeId,
+                name: 'Slow',
+                response: device.register(begun.body.options),
+            })
+            .expect(403)
+        expect(refused.body.details[0].message).toBe('reauthentication_required')
     })
 
     it('asks an older session to sign in again before it adds a passkey', async () => {
