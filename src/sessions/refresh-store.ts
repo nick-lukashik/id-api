@@ -193,15 +193,12 @@ export class RefreshStore implements OnModuleInit {
         }
     }
 
-    /**
-     * The session the token still opens (the current one, or the previous one
-     * within grace), or null: signing out takes the token, not just its id.
-     */
     /** Whether the session can still be refreshed: ending one deletes its key. */
     async isLive(sessionId: string) {
         return (await this.available(() => this.redis.exists(key(sessionId)))) === 1
     }
 
+    /** The live session the token was really given by, or null: signing out takes the token, not just its id. */
     async sessionOf(presented: string): Promise<string | null> {
         const sessionId = familyOf(presented)
         if (!sessionId) return null
