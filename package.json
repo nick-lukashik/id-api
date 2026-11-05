@@ -25,6 +25,7 @@
         "verify": "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
         "db:generate": "drizzle-kit generate",
         "db:migrate": "pnpm build && node --env-file-if-exists=.env dist/db/migrate.js",
+        "messaging:replay-dlq": "pnpm build && node --env-file-if-exists=.env dist/messaging/replay-dlq.js",
         "infra:up": "docker compose up -d --wait",
         "infra:down": "docker compose down",
         "infra:reset": "docker compose down --volumes",

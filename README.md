@@ -86,6 +86,7 @@ pnpm env:local     # .env with a fresh ES256 key and local secrets
 pnpm db:migrate
 pnpm dev           # http://localhost:4100
 pnpm verify        # biome, typecheck, build, tests (Testcontainers)
+pnpm messaging:replay-dlq id-api.subscriptions --limit 100   # dead letters back to their queue, after the cause is fixed
 ```
 
 `@nick-lukashik/auth` and `@nick-lukashik/contracts` come from the neighbouring `packages` folder (`file:`) until their first publish. The Docker build needs the published versions (`packages/README.md`).
