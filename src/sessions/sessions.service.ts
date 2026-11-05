@@ -164,12 +164,19 @@ export class SessionsService {
                 .select({
                     revokedAt: sessions.revokedAt,
                     revokedReason: sessions.revokedReason,
+                    clientId: sessions.clientId,
                 })
                 .from(sessions)
                 .where(eq(sessions.id, session.parentSessionId))
             if (!parent || parent.revokedAt)
                 return {
                     ended: parent?.revokedReason ?? 'logout',
+                }
+            // A session under a site's session, from before sign-in to a site needed an id-web
+            // session: a sign-out reaches one level only, so it ends here.
+            if (parent.clientId !== null)
+                return {
+                    ended: 'logout',
                 }
         }
         const user = await this.users.get(this.db, session.userId)
