@@ -63,13 +63,18 @@ end
 return { 'DEAD' }
 `
 
-/** 1 when the token is the current one or the previous one within grace (same keys as ROTATE). */
-const HOLDS = `
+/**
+ * 1 when the token is one this live session was really given: the current one, the
+ * previous one within grace, or a superseded one (same keys as ROTATE). A sign-out with an
+ * old token may ask for what a refresh with it would do anyway, which is to end the session.
+ */
+const WAS_ISSUED = `
 local cur = redis.call('HGET', KEYS[1], 'cur')
 if not cur then return 0 end
 if cur == ARGV[1] then return 1 end
 local grace = redis.call('GET', KEYS[2])
 if grace and string.sub(grace, 1, string.find(grace, ':', 1, true) - 1) == ARGV[1] then return 1 end
+if redis.call('ZSCORE', KEYS[3], ARGV[1]) then return 1 end
 return 0
 `
 
@@ -201,10 +206,11 @@ export class RefreshStore implements OnModuleInit {
         const sessionId = familyOf(presented)
         if (!sessionId) return null
         const held = await this.available(() =>
-            this.redis.eval(HOLDS, {
+            this.redis.eval(WAS_ISSUED, {
                 keys: [
                     key(sessionId),
                     graceKey(sessionId),
+                    supersededKey(sessionId),
                 ],
                 arguments: [
                     hash(presented),

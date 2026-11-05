@@ -138,6 +138,18 @@ describe('refresh tokens', () => {
         expect((await revocation(session.sessionId))?.revokedReason).toBe('logout')
     })
 
+    it('signs out with a token long superseded: whoever turned it on is out too', async () => {
+        const session = await signIn('stolen@example.com')
+        const once = await refresh(session.refreshToken)
+        const twice = await refresh(once.body.refreshToken)
+        expect(twice.status).toBe(200)
+
+        expect((await logout(session.refreshToken)).status).toBe(204)
+
+        expect((await refresh(twice.body.refreshToken)).status).toBe(401)
+        expect((await revocation(session.sessionId))?.revokedReason).toBe('logout')
+    })
+
     it('remembers a superseded token for the refresh lifetime only', async () => {
         const store = t.app.get(RefreshStore)
         const options = {

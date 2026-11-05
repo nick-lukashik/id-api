@@ -203,8 +203,9 @@ export class SessionsService {
     }
 
     /**
-     * Ends a session by its refresh token (sign-out): only by a token that still
-     * opens it, never by the session id alone. Any other token is fine and changes nothing.
+     * Ends a session by its refresh token (sign-out): by any token it was really given,
+     * so whoever turned a stolen token on is out too; never by the session id alone. Any
+     * other token is fine and changes nothing.
      */
     async logout(presented: string) {
         const sessionId = await this.refresh.sessionOf(presented)
