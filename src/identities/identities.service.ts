@@ -34,8 +34,9 @@ const refused = (path: string, reason: string, code: 'UNPROCESSABLE' | 'CONFLICT
  * Google as a sign-in method. Signing in and linking are separate: a Google
  * account whose email already has an account here is never attached to it by
  * itself (`link_required`); its owner signs in with the email code and links
- * it on the account page. The email code keeps working either way, so
- * unlinking never locks anyone out.
+ * it on the account page. A new account from Google needs an address Google
+ * hosts: for any other the first sign-in is by the email code. The email code
+ * keeps working either way, so unlinking never locks anyone out.
  */
 @Injectable()
 export class IdentitiesService {
@@ -73,6 +74,17 @@ export class IdentitiesService {
             let user = await this.linkedUser(tx, profile.subject)
             if (!user) {
                 if (!profile.email || !profile.emailVerified) throw refused('email', 'unverified')
+                // Google cannot say who holds this mailbox now, and whoever signs in first would keep
+                // their way in. The first sign-in takes the code from the mailbox; Google is linked after.
+                if (!profile.hostedByGoogle) {
+                    const [taken] = await tx
+                        .select({
+                            id: users.id,
+                        })
+                        .from(users)
+                        .where(eq(users.email, profile.email))
+                    throw taken ? refused('email', 'link_required', 'CONFLICT') : refused('email', 'unverified')
+                }
                 const created = await this.users.create(tx, profile.email, input.locale, profile.name)
                 if (created) {
                     await this.attach(tx, created.id, profile)
