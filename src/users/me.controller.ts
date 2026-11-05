@@ -62,7 +62,8 @@ export class MeController {
 
     @Get('sessions')
     @ApiOperation({
-        summary: 'Active sessions, the current one marked; most recently active first, 50 to a page',
+        summary:
+            'Active sessions, the current one and the sites signed in from it marked; most recently active first, 50 to a page',
     })
     @ApiErrors(400, 401)
     async listSessions(
@@ -83,6 +84,7 @@ export class MeController {
                 authMethod: row.authMethod,
                 clientId: row.clientId,
                 current: row.id === caller.sessionId,
+                thisBrowser: row.parentSessionId === caller.sessionId,
             })),
             nextCursor: page.nextCursor,
         }

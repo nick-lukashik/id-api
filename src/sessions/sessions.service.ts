@@ -243,6 +243,7 @@ export class SessionsService {
                 ip: sessions.ip,
                 authMethod: sessions.authMethod,
                 clientId: sessions.clientId,
+                parentSessionId: sessions.parentSessionId,
             })
             .from(sessions)
             .where(

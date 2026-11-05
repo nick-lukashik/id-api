@@ -278,6 +278,48 @@ describe('session list', () => {
         })
     })
 
+    it('marks the sites of this browser, which ending the others leaves', async () => {
+        const me = await signIn('sites@example.com')
+        const other = await signIn('sites@example.com')
+        const [site] = await t.db
+            .insert(sessions)
+            .values({
+                userId: me.user.id,
+                authMethod: 'sso',
+                clientId: 'landing-web',
+                parentSessionId: me.sessionId,
+            })
+            .returning({
+                id: sessions.id,
+            })
+        if (!site) throw new Error('no site session')
+
+        const list = await t.http().get('/api/v1/me/sessions').set('authorization', bearer(me)).expect(200)
+        expect(
+            Object.fromEntries(
+                list.body.items.map((item: { id: string; thisBrowser: boolean }) => [
+                    item.id,
+                    item.thisBrowser,
+                ]),
+            ),
+        ).toEqual({
+            [me.sessionId]: false,
+            [other.sessionId]: false,
+            [site.id]: true,
+        })
+
+        await t.http().post('/api/v1/me/sessions/revoke-others').set('authorization', bearer(me)).expect(200, {
+            revoked: 1,
+        })
+        const after = await t.http().get('/api/v1/me/sessions').set('authorization', bearer(me)).expect(200)
+        expect(after.body.items.map((item: { id: string }) => item.id).sort()).toEqual(
+            [
+                me.sessionId,
+                site.id,
+            ].sort(),
+        )
+    })
+
     it('says at once that a session was ended, while its access token still opens the API', async () => {
         const me = await signIn('alive@example.com')
         const other = await signIn('alive@example.com')
