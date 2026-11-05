@@ -352,6 +352,28 @@ describe('session list', () => {
         await t.http().get('/api/v1/me').set('authorization', bearer(other)).expect(200)
     })
 
+    it('says in /me too that a session was ended, with no second call', async () => {
+        const session = await signIn('me-active@example.com')
+        const me = () => t.http().get('/api/v1/me').set('authorization', bearer(session)).expect(200)
+        expect((await me()).body).toMatchObject({
+            email: 'me-active@example.com',
+            active: true,
+        })
+        expect((await logout(session.refreshToken)).status).toBe(204)
+        expect((await me()).body.active).toBe(false)
+    })
+
+    it('still answers /me when Redis cannot tell whether the session is alive', async () => {
+        const session = await signIn('me-unknown@example.com')
+        const down = vi.spyOn(t.app.get(RefreshStore), 'isLive').mockRejectedValueOnce(new Error('Redis down'))
+        const answer = await t.http().get('/api/v1/me').set('authorization', bearer(session)).expect(200)
+        expect(answer.body).toMatchObject({
+            email: 'me-unknown@example.com',
+            active: null,
+        })
+        down.mockRestore()
+    })
+
     it('answers 503, not that the session ended, when it cannot tell', async () => {
         const me = await signIn('alive-down@example.com')
         const down = vi.spyOn(t.app.get(RefreshStore), 'isLive').mockRejectedValue(new AppError('UNAVAILABLE', 'down'))

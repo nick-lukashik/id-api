@@ -38,11 +38,19 @@ export class MeController {
 
     @Get()
     @ApiOperation({
-        summary: 'Profile and roles',
+        summary:
+            'Profile, roles and whether the session of this access token is still alive: one call for a page of a site. `active` is null when that cannot be told',
     })
     @ApiErrors(401)
-    me(@Caller() caller: AccessClaims) {
-        return this.users.profile(caller.userId)
+    async me(@Caller() caller: AccessClaims) {
+        const [profile, active] = await Promise.all([
+            this.users.profile(caller.userId),
+            this.sessions.isLive(caller.sessionId).catch(() => null),
+        ])
+        return {
+            ...profile,
+            active,
+        }
     }
 
     @Patch()

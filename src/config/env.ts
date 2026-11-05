@@ -67,13 +67,14 @@ export const envSchema = baseEnvSchema
          */
         PASSKEY_FRESH_SIGN_IN_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(900_000),
         /**
-         * The platform's apps that sign in through id-web, as `client=redirect URI`
-         * pairs separated by commas (`landing-web=https://nick-lukashik.com/auth/callback`).
+         * Sites on other domains that sign in through id-web, as `client=redirect URI`
+         * pairs separated by commas (`shop=https://other.example/auth/callback`). None
+         * today: sites under the platform's domain read the shared session cookie.
          * A redirect URI must match exactly.
          */
         OAUTH_CLIENTS: z
             .string()
-            .default('landing-web=https://nick-lukashik.com/auth/callback')
+            .default('')
             .transform((value, context) => {
                 const clients = new Map<string, string[]>()
                 for (const pair of value
