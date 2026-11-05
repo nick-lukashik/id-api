@@ -27,10 +27,15 @@ type Tokens = {
     }
 }
 
+let signIns = 0
+
+/** Signs in by email code, each time from another address (the per-IP limits stay out of the way). */
 async function emailSignIn(email: string): Promise<Tokens> {
+    const ip = `203.0.113.${100 + signIns++}`
     await t
         .http()
         .post('/api/v1/login/email')
+        .set('x-forwarded-for', ip)
         .send({
             email,
         })
@@ -39,6 +44,7 @@ async function emailSignIn(email: string): Promise<Tokens> {
     const verified = await t
         .http()
         .post('/api/v1/login/email/verify')
+        .set('x-forwarded-for', ip)
         .send({
             challengeId,
             code,
@@ -185,6 +191,48 @@ describe('sign-in with Google', () => {
                 email: 'fresh@gmail.com',
             }),
         ])
+    })
+
+    it('asks a new address Google does not host for the email code; Google can be linked after', async () => {
+        const code = t.google.account({
+            subject: 'g-former-owner',
+            email: 'shared@company.example',
+            emailVerified: true,
+            name: 'Former Owner',
+        })
+        const refused = await t.http().post('/api/v1/login/google').send(code).expect(422)
+        expect(refused.body.details[0].message).toBe('unverified')
+        const created = await t.db.execute(sql`select id from users where email = 'shared@company.example'`)
+        expect(created.rows).toEqual([])
+
+        const owner = await emailSignIn('shared@company.example')
+        await t.http().post('/api/v1/me/identities/google').set('authorization', bearer(owner)).send(code).expect(200)
+        const signedIn = await t.http().post('/api/v1/login/google').send(code).expect(200)
+        expect(signedIn.body.user.id).toBe(owner.user.id)
+    })
+
+    it('says link_required for an address it does not host that already has an account', async () => {
+        await emailSignIn('held@company.example')
+        const code = t.google.account({
+            subject: 'g-held',
+            email: 'held@company.example',
+            emailVerified: true,
+            name: null,
+        })
+        const refused = await t.http().post('/api/v1/login/google').send(code).expect(409)
+        expect(refused.body.details[0].message).toBe('link_required')
+    })
+
+    it('creates an account for a Workspace address (hd), which Google hosts', async () => {
+        const code = t.google.account({
+            subject: 'g-workspace',
+            email: 'person@workspace.example',
+            emailVerified: true,
+            hd: 'workspace.example',
+            name: null,
+        })
+        const created = await t.http().post('/api/v1/login/google').send(code).expect(200)
+        expect(created.body.user.email).toBe('person@workspace.example')
     })
 
     it('refuses an unverified email, a wrong nonce and a bad code', async () => {

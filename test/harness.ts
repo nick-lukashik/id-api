@@ -16,6 +16,7 @@ import {
     type GoogleProfile,
     GoogleProvider,
     GoogleRejected,
+    googleHostsEmail,
 } from '../src/identities/google.provider.js'
 import { CodeDelivery, type CodeMessage } from '../src/login/code-delivery.js'
 import { TEST_ORIGIN, TEST_RP_ID } from './authenticator.js'
@@ -53,9 +54,15 @@ export class FakeGoogle extends GoogleProvider {
         }
     >()
 
-    account(profile: GoogleProfile, nonce = 'n'.repeat(24)) {
+    account(
+        profile: Omit<GoogleProfile, 'hostedByGoogle'> & {
+            hd?: string
+        },
+        nonce = 'n'.repeat(24),
+    ) {
         this.accounts.set(profile.subject, {
             ...profile,
+            hostedByGoogle: googleHostsEmail(profile.email, profile.hd),
             nonce,
         })
         return {
@@ -72,6 +79,7 @@ export class FakeGoogle extends GoogleProvider {
             subject: account.subject,
             email: account.email,
             emailVerified: account.emailVerified,
+            hostedByGoogle: account.hostedByGoogle,
             name: account.name,
         }
     }

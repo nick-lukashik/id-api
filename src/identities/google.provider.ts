@@ -8,6 +8,8 @@ export type GoogleProfile = {
     subject: string
     email: string | null
     emailVerified: boolean
+    /** Whether Google hosts the mailbox ({@link googleHostsEmail}). */
+    hostedByGoogle: boolean
     name: string | null
 }
 
@@ -17,6 +19,14 @@ export type GoogleCode = {
     codeVerifier: string
     nonce: string
 }
+
+/**
+ * Whether Google hosts the address, so that `email_verified` speaks of who holds the mailbox
+ * now: Gmail, or a Workspace domain (`hd`). For any other address it only says the mailbox
+ * answered when the Google account was made, and the mailbox may have changed hands since.
+ */
+export const googleHostsEmail = (email: string | null, hd: string | undefined) =>
+    Boolean(hd) || Boolean(email?.endsWith('@gmail.com'))
 
 /** Google answered, and the answer is "no": a bad, reused or foreign code. */
 export class GoogleRejected extends Error {}
@@ -48,6 +58,7 @@ const claimsSchema = z.object({
         .optional(),
     name: z.string().max(200).optional(),
     nonce: z.string().optional(),
+    hd: z.string().optional(),
 })
 
 /** Google OpenID Connect: the token endpoint, then the ID token checks of Google's docs. */
@@ -109,10 +120,12 @@ export class GoogleOidcProvider extends GoogleProvider {
             throw new GoogleRejected('invalid id token')
         }
         if (claims.nonce !== nonce) throw new GoogleRejected('nonce mismatch')
+        const email = claims.email?.toLowerCase() ?? null
         return {
             subject: claims.sub,
-            email: claims.email?.toLowerCase() ?? null,
+            email,
             emailVerified: claims.email_verified === true || claims.email_verified === 'true',
+            hostedByGoogle: googleHostsEmail(email, claims.hd),
             name: claims.name ?? null,
         }
     }
