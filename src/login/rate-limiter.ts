@@ -72,6 +72,28 @@ export class RateLimiter implements OnModuleInit {
         }
     }
 
+    /**
+     * A budget everyone shares. Past it the service itself is out for now, so the
+     * answer is the 503 of an outage: there is no wait to tell one person about.
+     */
+    async spend(key: string, limit: number, windowMs: number) {
+        try {
+            await this.consume(key, limit, windowMs)
+        } catch (error) {
+            if (!(error instanceof AppError) || error.code !== 'RATE_LIMITED') throw error
+            this.logger.warn(
+                {
+                    key,
+                    limit,
+                },
+                'Budget used up, refusing',
+            )
+            throw new AppError('UNAVAILABLE', 'Sign-in is unavailable right now, retry later', undefined, {
+                cause: error,
+            })
+        }
+    }
+
     private refused(key: string, error: unknown) {
         this.unchecked?.inc()
         const now = Date.now()

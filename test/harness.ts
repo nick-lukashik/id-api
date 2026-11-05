@@ -118,6 +118,10 @@ export async function startApp(overrides: Record<string, string> = {}) {
         SIGNING_KEY_PEM: signingKey,
         LOGIN_CODE_PEPPER: randomBytes(32).toString('hex'),
         LOGIN_RESEND_COOLDOWN_MS: '0',
+        // Every test of a file comes from the same address; test/code-limits.int.test.ts sets its own.
+        LOGIN_CODES_PER_IP_HOUR: '100000',
+        LOGIN_CODES_PER_IP_DAY: '100000',
+        LOGIN_CODES_PER_DAY: '100000',
         NOTIFICATIONS_INTERNAL_TOKEN: randomBytes(32).toString('hex'),
         INTERNAL_API_TOKEN: INTERNAL_TOKEN,
         WEBAUTHN_RP_ID: TEST_RP_ID,

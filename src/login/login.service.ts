@@ -36,7 +36,12 @@ export class LoginService {
         const email = rawEmail.trim().toLowerCase()
         await this.limiter.consume(`resend:${digest(email)}`, 1, this.config.resendCooldownMs)
         await this.limiter.consume(`email-day:${digest(email)}`, 10, 24 * 3_600_000)
-        if (client.ip) await this.limiter.consume(`ip:${client.ip}`, 20, 3_600_000)
+        if (client.ip) {
+            await this.limiter.consume(`ip:${client.ip}`, this.config.codesPerIpHour, 3_600_000)
+            await this.limiter.consume(`ip-day:${client.ip}`, this.config.codesPerIpDay, 24 * 3_600_000)
+        }
+        // Last: a request refused above must not spend what everyone shares.
+        await this.limiter.spend('codes-day', this.config.codesPerDay, 24 * 3_600_000)
 
         const now = new Date()
         const expiresAt = new Date(now.getTime() + this.config.codeTtlSec * 1000)

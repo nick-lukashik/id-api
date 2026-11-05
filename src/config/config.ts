@@ -44,6 +44,9 @@ export const loginConfig = registerAs('login', () => ({
     codeTtlSec: env().LOGIN_CODE_TTL_SECONDS,
     resendCooldownMs: env().LOGIN_RESEND_COOLDOWN_MS,
     maxAttempts: env().LOGIN_MAX_ATTEMPTS,
+    codesPerIpHour: env().LOGIN_CODES_PER_IP_HOUR,
+    codesPerIpDay: env().LOGIN_CODES_PER_IP_DAY,
+    codesPerDay: env().LOGIN_CODES_PER_DAY,
 }))
 
 export const internalConfig = registerAs('internal', () => ({
