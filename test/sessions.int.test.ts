@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AppError } from '../src/common/http/app-error.js'
-import { sessions } from '../src/db/schema.js'
+import { authorizationCodes, sessions } from '../src/db/schema.js'
 import { RefreshStore } from '../src/sessions/refresh-store.js'
 import { SessionsService } from '../src/sessions/sessions.service.js'
 import { SITE_CALLBACK, startApp, type TestApp } from './harness.js'
@@ -400,6 +400,90 @@ describe('site sessions and the sign-out of their id-web session', () => {
                 ...grant,
             })
             .then(response => response)
+
+    /** A site's session from a code of the id-web session. */
+    async function siteSession(session: Tokens): Promise<Tokens> {
+        const exchanged = await exchange(await authorize(session))
+        expect(exchanged.status).toBe(200)
+        return exchanged.body
+    }
+
+    it("refuses a code to a site's own session: only an id-web session signs in to a site", async () => {
+        const web = await signIn('no-chain@example.com')
+        const site = await siteSession(web)
+        const pair = verifierPair()
+        await t
+            .http()
+            .post('/api/v1/oauth/authorize')
+            .set('authorization', bearer(site))
+            .send({
+                clientId: 'landing-web',
+                redirectUri: SITE_CALLBACK,
+                codeChallenge: pair.codeChallenge,
+                codeChallengeMethod: 'S256',
+            })
+            .expect(403)
+    })
+
+    it('refuses a code to a session that has ended, while its access token still opens the API', async () => {
+        const web = await signIn('ended-code@example.com')
+        expect((await logout(web.refreshToken)).status).toBe(204)
+        await t
+            .http()
+            .post('/api/v1/oauth/authorize')
+            .set('authorization', bearer(web))
+            .send({
+                clientId: 'landing-web',
+                redirectUri: SITE_CALLBACK,
+                codeChallenge: verifierPair().codeChallenge,
+                codeChallengeMethod: 'S256',
+            })
+            .expect(401)
+    })
+
+    it("refuses to exchange a code issued to a site's session before that was refused", async () => {
+        const web = await signIn('old-code@example.com')
+        const site = await siteSession(web)
+        const pair = verifierPair()
+        const code = randomBytes(32).toString('base64url')
+        await t.db.insert(authorizationCodes).values({
+            codeHash: createHash('sha256').update(code).digest('hex'),
+            clientId: 'landing-web',
+            redirectUri: SITE_CALLBACK,
+            codeChallenge: pair.codeChallenge,
+            sessionId: site.sessionId,
+            userId: web.user.id,
+            expiresAt: new Date(Date.now() + 60_000),
+        })
+        const refused = await exchange({
+            code,
+            codeVerifier: pair.codeVerifier,
+        })
+        expect(refused.status).toBe(422)
+        expect(await liveChildren(site.sessionId)).toBe(0)
+    })
+
+    it("ends a session left under a site's session at its next refresh, with the sign-out or without", async () => {
+        const web = await signIn('old-chain@example.com')
+        const site = await siteSession(web)
+        const [nested] = await t.db
+            .insert(sessions)
+            .values({
+                userId: web.user.id,
+                authMethod: 'sso',
+                clientId: 'landing-web',
+                parentSessionId: site.sessionId,
+            })
+            .returning({
+                id: sessions.id,
+            })
+        if (!nested) throw new Error('no nested session')
+        const tokens = await t.app.get(SessionsService).issue(nested.id, web.user.id)
+
+        expect((await refresh(tokens.refreshToken)).status).toBe(401)
+        expect((await revocation(nested.id))?.revokedReason).toBe('logout')
+        expect((await refresh(site.refreshToken)).status).toBe(200)
+    })
 
     async function liveChildren(parentSessionId: string) {
         const { rows } = await t.db.execute<{
