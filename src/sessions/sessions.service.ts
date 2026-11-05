@@ -238,6 +238,16 @@ export class SessionsService {
         return session
     }
 
+    /** The same in a transaction, the row locked until it ends: a sign-out of this session waits, or came first. */
+    async activeLocked(tx: Tx, userId: string, sessionId: string) {
+        const [session] = await tx
+            .select()
+            .from(sessions)
+            .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+            .for('update')
+        return session
+    }
+
     /** The live sessions, most recently active first, 50 to a page; `from` is the previous page's `nextCursor`. */
     async list(userId: string, from?: string) {
         const after = from ? cursor.decode(from) : undefined

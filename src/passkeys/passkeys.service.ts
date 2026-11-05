@@ -97,11 +97,7 @@ export class PasskeysService {
      */
     async registrationOptions(caller: AccessClaims) {
         await this.limiter.consume(`passkey-register:${caller.userId}`, 20, 3_600_000)
-        const session = await this.sessions.active(caller.userId, caller.sessionId)
-        if (!session) throw new AppError('UNAUTHORIZED', 'Session ended, sign in again')
-        const age = Date.now() - session.createdAt.getTime()
-        if (session.clientId !== null || age > this.config.freshSignInMs)
-            throw refusal('session', 'reauthentication_required', 'FORBIDDEN')
+        this.requireFreshWebSession(await this.sessions.active(caller.userId, caller.sessionId))
         const user = await this.users.get(this.db, caller.userId)
         if (user.status !== 'active') throw new AppError('FORBIDDEN', 'Account suspended')
 
@@ -141,6 +137,20 @@ export class PasskeysService {
         }
     }
 
+    private requireFreshWebSession(
+        session:
+            | {
+                  clientId: string | null
+                  createdAt: Date
+              }
+            | undefined,
+    ) {
+        if (!session) throw new AppError('UNAUTHORIZED', 'Session ended, sign in again')
+        const age = Date.now() - session.createdAt.getTime()
+        if (session.clientId !== null || age > this.config.freshSignInMs)
+            throw refusal('session', 'reauthentication_required', 'FORBIDDEN')
+    }
+
     /** Verifies the new credential against the challenge of this user and session, then stores it. */
     async register(
         caller: AccessClaims,
@@ -172,6 +182,9 @@ export class PasskeysService {
 
         const { credential } = info
         const created = await this.db.transaction(async tx => {
+            // Again, now: the ceremony takes minutes and an access token outlives the session it
+            // came from. Locked as a sign-out locks it: one waits for the other.
+            this.requireFreshWebSession(await this.sessions.activeLocked(tx, caller.userId, caller.sessionId))
             const user = await lockUser(tx, caller.userId)
             if (user.status !== 'active') throw new AppError('FORBIDDEN', 'Account suspended')
             const [held] = await tx
