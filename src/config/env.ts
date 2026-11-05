@@ -38,6 +38,14 @@ export const envSchema = baseEnvSchema
         LOGIN_CODE_TTL_SECONDS: z.coerce.number().int().min(60).max(3_600).default(600),
         LOGIN_RESEND_COOLDOWN_MS: z.coerce.number().int().min(0).max(600_000).default(60_000),
         LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+        /** Codes one IP may ask for. Low enough that one address cannot spend the budget below in a day. */
+        LOGIN_CODES_PER_IP_HOUR: z.coerce.number().int().min(1).default(5),
+        LOGIN_CODES_PER_IP_DAY: z.coerce.number().int().min(1).default(15),
+        /**
+         * Codes from everyone in 24 hours. The mail plan's limit is shared with other mail, and
+         * past it no code gets out anyway; the alerts AuthCodeBudget* in gitops follow this number.
+         */
+        LOGIN_CODES_PER_DAY: z.coerce.number().int().min(1).default(70),
         /** notifications-api inside the cluster and its service token (sign-in codes, ADR: synchronous delivery). */
         NOTIFICATIONS_URL: z.url().default('http://notifications-api.prod.svc'),
         NOTIFICATIONS_INTERNAL_TOKEN: secret,

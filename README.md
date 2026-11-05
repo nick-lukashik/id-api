@@ -36,7 +36,8 @@ Only `id-web` (server side) and other services inside the cluster call it. It ha
 
 Limits:
 - one code per email per `LOGIN_RESEND_COOLDOWN_MS` (60 s) and 10 codes per email per day;
-- 20 codes per IP per hour and 30 verifications per IP per 10 minutes;
+- 5 codes per IP per hour and 15 per day (`LOGIN_CODES_PER_IP_HOUR`, `LOGIN_CODES_PER_IP_DAY`) and 30 verifications per IP per 10 minutes;
+- 70 codes from everyone in 24 hours (`LOGIN_CODES_PER_DAY`): past it a code request answers 503, while Google, passkeys and open sessions keep working;
 - 5 attempts per code;
 - a code lives 10 minutes.
 
@@ -47,7 +48,7 @@ Only an HMAC of the code is stored, keyed by `LOGIN_CODE_PEPPER`. The code itsel
 ## Tokens
 
 - **Access token.** JWT ES256 with `typ: at+jwt` and `kid` = RFC 7638 thumbprint. Claims: `iss` = `TOKEN_ISSUER`, `aud` = `TOKEN_AUDIENCE`, `sub`, `sid`, `roles`, `av`. Lifetime `ACCESS_TOKEN_TTL_SECONDS` (300). Services check it with [`@nick-lukashik/auth`](https://github.com/nick-lukashik/packages).
-- **Refresh token.** `<sessionId>.<random>`. Only its SHA-256 is kept, in Redis (`rt:<sid>`). It rotates in one Lua script (`src/sessions/refresh-store.ts`). Redis is a required dependency here: readiness fails without it. `rtg:<sid>` keeps the previous token for the grace window (`REFRESH_GRACE_MS`, 20 s), and `rtp:<sid>` the hashes of the newest 512 superseded tokens (about 42 hours of constant use). A presented token is one of:
+- **Refresh token.** `<sessionId>.<random>`. The current one is kept as a SHA-256, in Redis (`rt:<sid>`). It rotates in one Lua script (`src/sessions/refresh-store.ts`). Redis is a required dependency here: readiness fails without it. `rtg:<sid>` keeps the hash of the previous token and the new token in clear for the grace window (`REFRESH_GRACE_MS`, 20 s), and Redis's append-only file keeps that value on disk after it expires, until the file is rewritten. The owner accepted this risk. `rtp:<sid>` holds the hashes of the newest 512 superseded tokens (about 42 hours of constant use). A presented token is one of:
   - the current one: it rotates;
   - the previous one within grace: the same new token again (two tabs, a lost response);
   - `REUSE`, a superseded one still in `rtp:<sid>`: all keys go and the session is revoked (`reuse_detected`), 401;
