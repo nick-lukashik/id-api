@@ -58,6 +58,12 @@ export class OAuthService {
         },
     ) {
         this.client(input.clientId, input.redirectUri)
+        // Only the id-web session a person signed in to signs them in to a site. A site's
+        // own token cannot make a session of its own: a sign-out would not reach that far.
+        const session = await this.sessions.active(caller.userId, caller.sessionId)
+        if (!session) throw new AppError('UNAUTHORIZED', 'Session ended, sign in again')
+        if (session.clientId !== null || session.parentSessionId !== null)
+            throw new AppError('FORBIDDEN', 'Only an id-web session signs in to a site')
         const code = randomBytes(32).toString('base64url')
         const expiresAt = new Date(Date.now() + this.config.codeTtlMs)
         // Spent and expired codes are no use to anyone; each new one sweeps them.
@@ -128,7 +134,14 @@ export class OAuthService {
                     id: sessions.id,
                 })
                 .from(sessions)
-                .where(and(eq(sessions.id, consumed.sessionId), isNull(sessions.revokedAt)))
+                .where(
+                    and(
+                        eq(sessions.id, consumed.sessionId),
+                        isNull(sessions.revokedAt),
+                        isNull(sessions.clientId),
+                        isNull(sessions.parentSessionId),
+                    ),
+                )
                 .for('update')
             if (!parent) throw invalidGrant()
             return this.sessions.create(tx, consumed.userId, client, 'sso', {
