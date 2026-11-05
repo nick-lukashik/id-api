@@ -14,15 +14,18 @@ const SUPERSEDED_KEPT = 512
 /**
  * Refresh-token rotation in one atomic Lua script.
  *
- * Per session: `rt:<sid>` holds sha256(current token), TTL = refresh lifetime;
- * `rtg:<sid>` holds "<sha256(previous)>:<current plaintext>" for the grace window;
- * `rtp:<sid>` holds sha256 of the newest SUPERSEDED_KEPT superseded tokens, scored
- * by when each was superseded, for the refresh lifetime (older ones would have
- * expired anyway).
+ * Per session: `rt:<sid>` holds `cur`, sha256(current token), and `prev`, sha256 of the
+ * token that was current before it, TTL = refresh lifetime; `rtg:<sid>` holds
+ * "<sha256(previous)>:<current plaintext>" for the grace window; `rtp:<sid>` holds sha256
+ * of the newest SUPERSEDED_KEPT superseded tokens, scored by when each was superseded,
+ * for the refresh lifetime (older ones would have expired anyway).
  *
  * Presented token:
  * - == current                → OK: rotate, keep a grace entry for the old token;
- * - == previous within grace  → RETRY: the token already issued (two tabs, a lost response);
+ * - == previous within grace  → RETRY: the token already issued (two tabs, parallel requests);
+ * - == previous after grace   → REISSUED: a new token in place of the current one. Any use
+ *                               of the current one would have turned it, so it was never
+ *                               used: its answer got lost (a closed tab, no network);
  * - superseded, family alive  → REUSE: all keys deleted, the session is burned;
  * - anything else             → DEAD: revoked, expired or never issued; nothing changes,
  *                               so a session id alone (the `sid` claim) burns nothing.
@@ -30,22 +33,29 @@ const SUPERSEDED_KEPT = 512
  * A token older than the cap counts as DEAD, not REUSE: replaying one that old
  * is refused but no longer burns the session.
  *
+ * Whoever holds the previous token gets a session while the person is away, and when
+ * the person comes back with the token replaced here, that is REUSE and both are out.
+ *
  * The grace entry keeps the current plaintext for at most the grace window
  * inside Redis of the cluster; it is never logged.
  */
 const ROTATE = `
-local cur = redis.call('HGET', KEYS[1], 'cur')
-if not cur then return { 'DEAD' } end
-if cur == ARGV[1] then
+local function turn(from)
   redis.call('HSET', KEYS[1], 'cur', ARGV[2])
   redis.call('EXPIRE', KEYS[1], ARGV[5])
   if tonumber(ARGV[4]) > 0 then
     redis.call('SET', KEYS[2], ARGV[1] .. ':' .. ARGV[3], 'PX', ARGV[4])
   end
-  redis.call('ZADD', KEYS[3], ARGV[6], ARGV[1])
+  redis.call('ZADD', KEYS[3], ARGV[6], from)
   redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', '(' .. ARGV[7])
   redis.call('ZREMRANGEBYRANK', KEYS[3], 0, ${-SUPERSEDED_KEPT - 1})
   redis.call('EXPIRE', KEYS[3], ARGV[5])
+end
+local cur = redis.call('HGET', KEYS[1], 'cur')
+if not cur then return { 'DEAD' } end
+if cur == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'prev', ARGV[1])
+  turn(ARGV[1])
   return { 'OK', ARGV[3] }
 end
 local grace = redis.call('GET', KEYS[2])
@@ -57,6 +67,10 @@ if grace then
 end
 local superseded = redis.call('ZSCORE', KEYS[3], ARGV[1])
 if superseded and tonumber(superseded) >= tonumber(ARGV[7]) then
+  if redis.call('HGET', KEYS[1], 'prev') == ARGV[1] then
+    turn(cur)
+    return { 'REISSUED', ARGV[3] }
+  end
   redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
   return { 'REUSE' }
 end
@@ -80,7 +94,7 @@ return 0
 
 export type RotateResult =
     | {
-          result: 'OK' | 'RETRY'
+          result: 'OK' | 'RETRY' | 'REISSUED'
           sessionId: string
           token: string
       }
@@ -177,11 +191,11 @@ export class RefreshStore implements OnModuleInit {
                 ],
             })
         const reply = (await this.twice(turn)) as [
-            'OK' | 'RETRY' | 'REUSE' | 'DEAD',
+            'OK' | 'RETRY' | 'REISSUED' | 'REUSE' | 'DEAD',
             string | undefined,
         ]
         const [result, token] = reply
-        if ((result === 'OK' || result === 'RETRY') && token)
+        if ((result === 'OK' || result === 'RETRY' || result === 'REISSUED') && token)
             return {
                 result,
                 sessionId,

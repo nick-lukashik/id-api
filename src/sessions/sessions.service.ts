@@ -91,7 +91,8 @@ export class SessionsService {
     }
 
     /**
-     * Rotates the refresh token; a reused one burns the session. All it needs from
+     * Rotates the refresh token; a reused one burns the session (RefreshStore says
+     * what counts as reuse: a lost answer does not). All it needs from
      * Postgres is read first: a refresh that fails on it leaves the token as it was,
      * and an outage longer than the grace window cannot read as reuse afterwards.
      */
@@ -119,7 +120,14 @@ export class SessionsService {
                 'reuse_detected',
             )
         }
-        if (rotated.result !== 'OK' && rotated.result !== 'RETRY') throw sessionEnded()
+        if (rotated.result !== 'OK' && rotated.result !== 'RETRY' && rotated.result !== 'REISSUED') throw sessionEnded()
+        if (rotated.result === 'REISSUED')
+            this.logger.log(
+                {
+                    sessionId: rotated.sessionId,
+                },
+                'Refresh token issued again: the answer to the last refresh was lost',
+            )
 
         if (!state) {
             await this.refresh.revoke([
