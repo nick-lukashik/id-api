@@ -150,6 +150,73 @@ describe('refresh tokens', () => {
         expect((await revocation(session.sessionId))?.revokedReason).toBe('logout')
     })
 
+    describe('the answer to a refresh got lost, and the old token comes back after the grace window', () => {
+        const options = {
+            ttlSec: 3_600,
+            graceMs: 0,
+        }
+        const turned = async (token: string) => {
+            const rotated = await t.app.get(RefreshStore).rotate(token, options)
+            if (rotated.result !== 'OK' && rotated.result !== 'REISSUED') throw new Error(rotated.result)
+            return rotated.token
+        }
+
+        it('issues a new token, however many times, and the session goes on with the last', async () => {
+            const store = t.app.get(RefreshStore)
+            const sessionId = randomUUID()
+            const before = await store.issue(sessionId, options.ttlSec)
+            const lost = await turned(before)
+
+            const again = await store.rotate(before, options)
+            expect(again.result).toBe('REISSUED')
+            const last = await store.rotate(before, options)
+            expect(last.result).toBe('REISSUED')
+            if (last.result !== 'REISSUED') return
+            expect(last.token).not.toBe(lost)
+
+            expect((await store.rotate(last.token, options)).result).toBe('OK')
+            expect(await store.sessionOf(last.token)).toBe(sessionId)
+        })
+
+        it('within the grace window the same token comes back instead, also right after issuing it again', async () => {
+            const store = t.app.get(RefreshStore)
+            const before = await store.issue(randomUUID(), options.ttlSec)
+            await turned(before)
+            const withGrace = {
+                ...options,
+                graceMs: 60_000,
+            }
+            const again = await store.rotate(before, withGrace)
+            expect(again.result).toBe('REISSUED')
+            const racing = await store.rotate(before, withGrace)
+            expect(racing.result).toBe('RETRY')
+            if (again.result !== 'REISSUED' || racing.result !== 'RETRY') return
+            expect(racing.token).toBe(again.token)
+        })
+
+        it('burns the session once the new token was used: that is not a lost answer', async () => {
+            const store = t.app.get(RefreshStore)
+            const sessionId = randomUUID()
+            const before = await store.issue(sessionId, options.ttlSec)
+            const used = await turned(before)
+            const current = await turned(used)
+
+            expect((await store.rotate(before, options)).result).toBe('REUSE')
+            expect(await store.sessionOf(current)).toBeNull()
+        })
+
+        it('burns the session when the token it replaced turns up: someone else took the session', async () => {
+            const store = t.app.get(RefreshStore)
+            const sessionId = randomUUID()
+            const before = await store.issue(sessionId, options.ttlSec)
+            const person = await turned(before)
+            const thief = await turned(before)
+
+            expect((await store.rotate(person, options)).result).toBe('REUSE')
+            expect(await store.sessionOf(thief)).toBeNull()
+        })
+    })
+
     it('remembers a superseded token for the refresh lifetime only', async () => {
         const store = t.app.get(RefreshStore)
         const options = {
