@@ -217,6 +217,11 @@ export class SessionsService {
             )
     }
 
+    /** Whether the session of an access token is still alive: the token says nothing of one ended since it was issued. */
+    isLive(sessionId: string) {
+        return this.refresh.isLive(sessionId)
+    }
+
     /** A live session of this user, or undefined. */
     async active(userId: string, sessionId: string) {
         const [session] = await this.db

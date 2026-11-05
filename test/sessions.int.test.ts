@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { AppError } from '../src/common/http/app-error.js'
 import { sessions } from '../src/db/schema.js'
 import { RefreshStore } from '../src/sessions/refresh-store.js'
 import { SessionsService } from '../src/sessions/sessions.service.js'
@@ -275,6 +276,33 @@ describe('session list', () => {
         await t.http().post('/api/v1/me/sessions/revoke-others').set('authorization', bearer(me)).expect(200, {
             revoked: 1,
         })
+    })
+
+    it('says at once that a session was ended, while its access token still opens the API', async () => {
+        const me = await signIn('alive@example.com')
+        const other = await signIn('alive@example.com')
+        const active = (session: Tokens) =>
+            t.http().get('/api/v1/me/session').set('authorization', bearer(session)).expect(200)
+        await active(other).expect({
+            active: true,
+        })
+
+        await t.http().delete(`/api/v1/me/sessions/${other.sessionId}`).set('authorization', bearer(me)).expect(204)
+
+        await active(other).expect({
+            active: false,
+        })
+        await active(me).expect({
+            active: true,
+        })
+        await t.http().get('/api/v1/me').set('authorization', bearer(other)).expect(200)
+    })
+
+    it('answers 503, not that the session ended, when it cannot tell', async () => {
+        const me = await signIn('alive-down@example.com')
+        const down = vi.spyOn(t.app.get(RefreshStore), 'isLive').mockRejectedValue(new AppError('UNAVAILABLE', 'down'))
+        await t.http().get('/api/v1/me/session').set('authorization', bearer(me)).expect(503)
+        down.mockRestore()
     })
 })
 
