@@ -2,6 +2,7 @@ import { type BeforeApplicationShutdown, Inject, Injectable, Logger, type OnAppl
 import type { ConfigType } from '@nestjs/config'
 import { and, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { DB } from '../common/database/database.js'
+import { safeErrorMessage } from '../common/logging/safe-error.js'
 import { tokenConfig } from '../config/config.js'
 import { authorizationCodes, loginChallenges, sessions } from '../db/schema.js'
 import type { Db, Tx } from '../db/types.js'
@@ -189,7 +190,7 @@ export class Retention implements OnApplicationBootstrap, BeforeApplicationShutd
             this.logger.error(
                 {
                     ...purged,
-                    err: (error as Error).message,
+                    err: safeErrorMessage(error),
                 },
                 'Retention pass failed',
             )
