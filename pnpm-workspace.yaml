@@ -7,7 +7,7 @@ allowBuilds:
     protobufjs: false
     ssh2: false
 minimumReleaseAgeExclude:
-    - "@nick-lukashik/auth@0.1.0"
+    - "@nick-lukashik/auth@0.1.0 || 0.2.0"
     - "@nick-lukashik/contracts@0.1.0"
 # Dev tools only: patched versions of what Dependabot flags (esbuild through drizzle-kit, minimatch through glob).
 overrides:

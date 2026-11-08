@@ -30,7 +30,8 @@
         "infra:down": "docker compose down",
         "infra:reset": "docker compose down --volumes",
         "env:local": "node scripts/env-local.mjs",
-        "cli:grant-owner": "pnpm build && node --env-file-if-exists=.env dist/cli/grant-owner.js"
+        "cli:grant-owner": "pnpm build && node --env-file-if-exists=.env dist/cli/grant-owner.js",
+        "cli:grant-role": "pnpm build && node --env-file-if-exists=.env dist/cli/grant-role.js"
     },
     "dependencies": {
         "@nestjs/common": "12.3.2",
@@ -40,7 +41,7 @@
         "@nestjs/swagger": "12.0.5",
         "@nestjs/terminus": "12.1.0",
         "@nestjs/throttler": "6.7.1",
-        "@nick-lukashik/auth": "0.1.0",
+        "@nick-lukashik/auth": "0.2.0",
         "@nick-lukashik/contracts": "0.1.0",
         "@prometheus-io/client": "0.16.1",
         "@redis/client": "6.3.1",
