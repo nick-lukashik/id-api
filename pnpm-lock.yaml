@@ -192,8 +192,8 @@ importers:
         specifier: 6.7.1
         version: 6.7.1(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.3.2)(reflect-metadata@0.2.2)
       '@nick-lukashik/auth':
-        specifier: 0.1.0
-        version: 0.1.0(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 0.2.0
+        version: 0.2.0(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nick-lukashik/contracts':
         specifier: 0.1.0
         version: 0.1.0(zod@4.6.7)
@@ -896,8 +896,8 @@ packages:
       '@nestjs/core': ^7.0.0 || ^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0
       reflect-metadata: ^0.1.13 || ^0.2.0
 
-  '@nick-lukashik/auth@0.1.0':
-    resolution: {integrity: sha512-eIGzM1tuvovBVtdZUdtrd7/ipV45Cpez1ys8X0u6ro61io0pHfHwuKU9klQhzhKSzFSIaYFDzEH4vL6+LflYjg==, tarball: https://npm.pkg.github.com/download/@nick-lukashik/auth/0.1.0/fbf8604749911586173d4815cfd5d4735224973d}
+  '@nick-lukashik/auth@0.2.0':
+    resolution: {integrity: sha512-9PIe3QQ3fRts2vilWhKP5DlKZ256wfgYDyums8pLqsNW6KcOthuJo1wBwNBjCBFw+y7OCLD/zKZVhItcA2DKIA==, tarball: https://npm.pkg.github.com/download/@nick-lukashik/auth/0.2.0/98cad41707d1d39db77d6422dae29c6d877e9b6a}
     peerDependencies:
       '@nestjs/common': ^12.0.0
       '@nestjs/core': ^12.0.0
@@ -3309,7 +3309,7 @@ snapshots:
       '@nestjs/core': 12.3.2(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
 
-  '@nick-lukashik/auth@0.1.0(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@nick-lukashik/auth@0.2.0(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
       '@nestjs/common': 12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 12.3.2(@nestjs/common@12.3.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.3.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
