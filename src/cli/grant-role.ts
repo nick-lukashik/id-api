@@ -1,8 +1,6 @@
 import 'reflect-metadata'
 import { NestFactory } from '@nestjs/core'
 import { isRole } from '@nick-lukashik/auth'
-import { AppModule } from '../app.module.js'
-import { RolesService } from '../users/roles.service.js'
 
 /**
  * A role for a person who signed in once: `node dist/cli/grant-role.js <email> <role>`
@@ -15,6 +13,11 @@ if (!email?.includes('@') || !isRole(role)) {
     process.stderr.write('usage: node dist/cli/grant-role.js <email> <role>  (a role of @nick-lukashik/auth)\n')
     process.exit(2)
 }
+// Runs next to the live server in its pod: no metrics listener of its own, or its
+// port is taken (EADDRINUSE). Set before the modules read the environment.
+process.env.METRICS_PORT = '0'
+const { AppModule } = await import('../app.module.js')
+const { RolesService } = await import('../users/roles.service.js')
 const app = await NestFactory.createApplicationContext(AppModule, {
     logger: [
         'error',
