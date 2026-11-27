@@ -1,6 +1,7 @@
 # id-api
 
 Identity of the nick-lukashik platform:
+
 - users;
 - sign-in by email code, with Google and with passkeys;
 - sessions with rotating refresh tokens, one per site;
@@ -35,6 +36,7 @@ Only `id-web` (server side) and other services inside the cluster call it. It ha
 | `GET /.well-known/jwks.json`                                                                                                      | everyone in the cluster | Public keys of access tokens (outside `/api`)                                                                                                                                                                                                                                                          |
 
 Limits:
+
 - one code per email per `LOGIN_RESEND_COOLDOWN_MS` (60 s) and 10 codes per email per day;
 - 5 codes per IP per hour and 15 per day (`LOGIN_CODES_PER_IP_HOUR`, `LOGIN_CODES_PER_IP_DAY`) and 30 verifications per IP per 10 minutes;
 - 70 codes from everyone in 24 hours (`LOGIN_CODES_PER_DAY`): past it a code request answers 503, while Google, passkeys and open sessions keep working;
@@ -49,15 +51,15 @@ Only an HMAC of the code is stored, keyed by `LOGIN_CODE_PEPPER`. The code itsel
 
 - **Access token.** JWT ES256 with `typ: at+jwt` and `kid` = RFC 7638 thumbprint. Claims: `iss` = `TOKEN_ISSUER`, `aud` = `TOKEN_AUDIENCE`, `sub`, `sid`, `roles`, `av`. Lifetime `ACCESS_TOKEN_TTL_SECONDS` (300). Services check it with [`@nick-lukashik/auth`](https://github.com/nick-lukashik/packages).
 - **Refresh token.** `<sessionId>.<random>`. The current one is kept as a SHA-256, in Redis (`rt:<sid>`). It rotates in one Lua script (`src/sessions/refresh-store.ts`). Redis is a required dependency here: readiness fails without it. `rtg:<sid>` keeps the hash of the previous token and the new token in clear for the grace window (`REFRESH_GRACE_MS`, 20 s), and Redis's append-only file keeps that value on disk after it expires, until the file is rewritten. The owner accepted this risk. `rtp:<sid>` holds the hashes of the newest 512 superseded tokens (about 42 hours of constant use). A presented token is one of:
-  - the current one: it rotates;
-  - the previous one within grace: the same new token again (two tabs, parallel requests);
-  - the previous one after grace: a new token in place of the current one, which nobody can have used, or it would have turned (a lost response: a closed tab, no network). Whoever holds the previous token gets a session until the person comes back, which is then `REUSE`;
-  - `REUSE`, any other superseded one still in `rtp:<sid>`: all keys go and the session is revoked (`reuse_detected`), 401;
-  - `DEAD`, anything else (revoked, expired, never issued, or superseded so long ago that the cap dropped it): 401 and nothing changes, so a session id alone (the `sid` claim) burns nothing.
+    - the current one: it rotates;
+    - the previous one within grace: the same new token again (two tabs, parallel requests);
+    - the previous one after grace: a new token in place of the current one, which nobody can have used, or it would have turned (a lost response: a closed tab, no network). Whoever holds the previous token gets a session until the person comes back, which is then `REUSE`;
+    - `REUSE`, any other superseded one still in `rtp:<sid>`: all keys go and the session is revoked (`reuse_detected`), 401;
+    - `DEAD`, anything else (revoked, expired, never issued, or superseded so long ago that the cap dropped it): 401 and nothing changes, so a session id alone (the `sid` claim) burns nothing.
 - **Key rotation.**
-  1. Put the next public JWK into `PREVIOUS_PUBLIC_KEYS` and deploy.
-  2. Switch `SIGNING_KEY_PEM` to the next key.
-  3. After 5 minutes, drop the old JWK.
+    1. Put the next public JWK into `PREVIOUS_PUBLIC_KEYS` and deploy.
+    2. Switch `SIGNING_KEY_PEM` to the next key.
+    3. After 5 minutes, drop the old JWK.
 - **The first owner.** That person signs in once, then: `kubectl exec deploy/id-api -- node dist/cli/grant-owner.js <email>`.
 - **A product role** (`tailor` opens Tailor): the person signs in once, then `kubectl exec deploy/id-api -- node dist/cli/grant-role.js <email> <role>`. Idempotent; the next access token carries it.
 - **Paid plans (grants).** A subscription gives a plan of a service, `service:plan` (`roulette:vip`), from `pay.subscription.changed.v1` (queue `id-api.subscriptions`): one row of `grants` per subscription, valid until `valid_until`; a version not newer than the last one changes nothing. Any number at once. Access tokens carry the ones in force as `grants`, so a period that ran out needs no job: the next token (5 minutes at the latest) simply lacks it. Services check `hasGrant(caller, 'roulette', 'vip')` of `@nick-lukashik/auth`. Roles are only for staff (`owner`, `support`) and never bought.
@@ -67,6 +69,7 @@ Only an HMAC of the code is stored, keyed by `LOGIN_CODE_PEPPER`. The code itsel
 ## Retention
 
 An hourly pass on every replica (`src/retention/retention.ts`) deletes sign-in data past its period, in batches that each commit by themselves:
+
 - a sign-in code request (`login_challenges`, the email in clear): 24 hours after it was made;
 - a signed-out or revoked session: 90 days after it ended;
 - a session nobody ended: 90 days after its refresh token expired (last activity + `REFRESH_TOKEN_TTL_SECONDS`, 30 days);
